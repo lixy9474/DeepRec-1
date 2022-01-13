@@ -49,7 +49,356 @@ from tensorflow.python.saved_model import loader
 
 
 class EmbeddingVariableTest(test_util.TensorFlowTestCase):
+  def testEmbeddingVariableForGetFreqsAndVersionsSparse(self):
+    print("testEmbeddingVariableForGetFreqsAndVersionsSparse")
+    ev_option = variables.EmbeddingVariableOption(record_freq=True, record_version=True)
+    embedding = variable_scope.get_embedding_variable("var_dist",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4,
+                                          ev_option=ev_option)
+    embedding1 = variable_scope.get_embedding_variable("var_dist1",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4)
+    ids = sparse_tensor.SparseTensor(indices=[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[8,0],[9,0]], values=math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64), dense_shape=[10, 1])
+    emb, freqs, versions = embedding_ops.embedding_lookup_sparse(embedding, ids, None, get_freqs=True, get_versions=True)
+    gs = training_util.get_or_create_global_step()
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
 
+    train_op = adagrad.AdagradOptimizer(0.1).minimize(loss, global_step=gs)
+
+    emb1= embedding_ops.embedding_lookup_sparse(embedding1, ids, None)
+    fun1 = math_ops.multiply(emb1, 2.0, name='multiply')
+    loss1 = math_ops.reduce_sum(fun1, name='reduce_sum')
+
+    train_op1 = adagrad.AdagradOptimizer(0.1).minimize(loss1, global_step=gs)
+    init = variables.global_variables_initializer()
+
+    with self.test_session() as sess:
+      sess.run([init])
+      r, id, f, v, _ = sess.run([emb, freqs[0], freqs[1], versions[1], train_op])
+      r, id, f, v, _ = sess.run([emb, freqs[0], freqs[1], versions[1], train_op])
+      r, id, f, v, _ = sess.run([emb, freqs[0], freqs[1], versions[1], train_op])
+      print(r, id, f, v)
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      freq_answer = [12, 12, 12, 12, 9, 9, 9, 6, 6, 3]
+      for i in range(0, 10):
+        self.assertEqual(f[i], freq_answer[i])
+        self.assertEqual(v[i], 1)
+        for j in range(0, 3):
+          self.assertEqual(r[i][j], r1[i][j])
+
+  def testEmbeddingVariableForGetFreqsSparse(self):
+    print("testEmbeddingVariableForGetFreqsSparse")
+    ev_option = variables.EmbeddingVariableOption(record_freq=True, record_version=True)
+    embedding = variable_scope.get_embedding_variable("var_dist",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4,
+                                          ev_option=ev_option)
+    embedding1 = variable_scope.get_embedding_variable("var_dist1",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4)
+    ids = sparse_tensor.SparseTensor(indices=[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[8,0],[9,0]], values=math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64), dense_shape=[10, 1])
+    emb, freqs = embedding_ops.embedding_lookup_sparse(embedding, ids, None, get_freqs=True)
+    gs = training_util.get_or_create_global_step()
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+
+    train_op = adagrad.AdagradOptimizer(0.1).minimize(loss, global_step=gs)
+
+    emb1= embedding_ops.embedding_lookup_sparse(embedding1, ids, None)
+    fun1 = math_ops.multiply(emb1, 2.0, name='multiply')
+    loss1 = math_ops.reduce_sum(fun1, name='reduce_sum')
+
+    train_op1 = adagrad.AdagradOptimizer(0.1).minimize(loss1, global_step=gs)
+    init = variables.global_variables_initializer()
+
+    with self.test_session() as sess:
+      sess.run([init])
+      r, id, f, _ = sess.run([emb, freqs[0], freqs[1], train_op])
+      r, id, f, _ = sess.run([emb, freqs[0], freqs[1], train_op])
+      r, id, f, _ = sess.run([emb, freqs[0], freqs[1], train_op])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      freq_answer = [12, 12, 12, 12, 9, 9, 9, 6, 6, 3]
+      for i in range(0, 10):
+        self.assertEqual(f[i], freq_answer[i])
+        for j in range(0, 3):
+          self.assertEqual(r[i][j], r1[i][j])
+
+  def testEmbeddingVariableForGetVersionsSparse(self):
+    print("testEmbeddingVariableForGetVersionsSparse")
+    ev_option = variables.EmbeddingVariableOption(record_version=True)
+    embedding = variable_scope.get_embedding_variable("var_dist",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          ev_option=ev_option)
+    embedding1 = variable_scope.get_embedding_variable("var_dist1",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer)
+    ids = sparse_tensor.SparseTensor(indices=[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[8,0],[9,0]], values=math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64), dense_shape=[10, 1])
+    emb, versions = embedding_ops.embedding_lookup_sparse(embedding, ids, None, get_versions=True)
+    gs = training_util.get_or_create_global_step()
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+
+    train_op = adagrad.AdagradOptimizer(0.1).minimize(loss, global_step=gs)
+
+    emb1= embedding_ops.embedding_lookup_sparse(embedding1, ids, None)
+    fun1 = math_ops.multiply(emb1, 2.0, name='multiply')
+    loss1 = math_ops.reduce_sum(fun1, name='reduce_sum')
+
+    train_op1 = adagrad.AdagradOptimizer(0.1).minimize(loss1, global_step=gs)
+    init = variables.global_variables_initializer()
+
+    with self.test_session() as sess:
+      sess.run([init])
+      r, id, v, _ = sess.run([emb, versions[0], versions[1], train_op])
+      r, id, v, _ = sess.run([emb, versions[0], versions[1], train_op])
+      r, id, v, _ = sess.run([emb, versions[0], versions[1], train_op])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      for i in range(0, 10):
+        self.assertEqual(v[i], 1)
+        for j in range(0, 3):
+          self.assertEqual(r[i][j], r1[i][j])
+
+  def testEmbeddingVariableForGetFreqsWithPartitioner(self):
+    print("testEmbeddingVariableForGetFreqsWithPartitioner")
+    ev_option = variables.EmbeddingVariableOption(record_freq=True)
+    embedding = variable_scope.get_embedding_variable("var_dist",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4,
+                                          ev_option=ev_option,
+                                          partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+    embedding1 = variable_scope.get_embedding_variable("var_dist1",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4,
+                                          partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+
+    emb, freqs = embedding_ops.embedding_lookup(embedding, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64), get_freqs=True)
+    emb1 = embedding_ops.embedding_lookup(embedding1, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+    gs = training_util.get_or_create_global_step()
+    train_op = adagrad.AdagradOptimizer(0.1).minimize(loss, global_step=gs)
+    fun1 = math_ops.multiply(emb1, 2.0, name='multiply')
+    loss1 = math_ops.reduce_sum(fun1, name='reduce_sum')
+    train_op1 = adagrad.AdagradOptimizer(0.1).minimize(loss1, global_step=gs)
+    init = variables.global_variables_initializer()
+    with self.test_session() as sess:
+      sess.run([init])
+      r, f, _ = sess.run([emb, freqs, train_op])
+      print(f)
+      r, f, _ = sess.run([emb, freqs, train_op])
+      r, f, _ = sess.run([emb, freqs, train_op])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      freq_answer = [12, 12, 12, 12, 9, 9, 9, 6, 6, 3]
+      for i in range(0, 10):
+        self.assertEqual(f[i], freq_answer[i])
+        for j in range(0, 3):
+          self.assertEqual(r[i][j], r1[i][j])
+
+  def testEmbeddingVariableForGetVersionsWithPartitioner(self):
+    print("testEmbeddingVariableForGetVersionsWithPartitioner")
+    ev_option = variables.EmbeddingVariableOption(record_version=True)
+    embedding = variable_scope.get_embedding_variable("var_dist",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          ev_option=ev_option,
+                                          partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+    embedding1 = variable_scope.get_embedding_variable("var_dist1",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+
+    emb, versions = embedding_ops.embedding_lookup(embedding, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64), get_versions=True)
+    emb1 = embedding_ops.embedding_lookup(embedding1, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+    gs = training_util.get_or_create_global_step()
+    train_op = adagrad.AdagradOptimizer(0.1).minimize(loss, global_step=gs)
+    fun1 = math_ops.multiply(emb1, 2.0, name='multiply')
+    loss1 = math_ops.reduce_sum(fun1, name='reduce_sum')
+    train_op1 = adagrad.AdagradOptimizer(0.1).minimize(loss1, global_step=gs)
+    init = variables.global_variables_initializer()
+    with self.test_session() as sess:
+      sess.run([init])
+      r, v, _ = sess.run([emb, versions, train_op])
+      r, v, _ = sess.run([emb, versions, train_op])
+      r, v, _ = sess.run([emb, versions, train_op])
+      print(v)
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      for i in range(0, 10):
+        self.assertEqual(v[i], 1)
+        for j in range(0, 3):
+          self.assertEqual(r[i][j], r1[i][j])
+
+  def testEmbeddingVariableForGetFreqsAndVersionsWithPartitioner(self):
+    print("testEmbeddingVariableForGetFreqsAndVersionsWithPartitioner")
+    ev_option = variables.EmbeddingVariableOption(record_freq=True, record_version=True)
+    embedding = variable_scope.get_embedding_variable("var_dist",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4,
+                                          ev_option=ev_option,
+                                          partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+    embedding1 = variable_scope.get_embedding_variable("var_dist1",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4,
+                                          partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+
+    emb, freqs, versions = embedding_ops.embedding_lookup(embedding, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64), get_freqs=True, get_versions=True)
+    emb1 = embedding_ops.embedding_lookup(embedding1, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+    gs = training_util.get_or_create_global_step()
+    train_op = adagrad.AdagradOptimizer(0.1).minimize(loss, global_step=gs)
+    fun1 = math_ops.multiply(emb1, 2.0, name='multiply')
+    loss1 = math_ops.reduce_sum(fun1, name='reduce_sum')
+    train_op1 = adagrad.AdagradOptimizer(0.1).minimize(loss1, global_step=gs)
+    init = variables.global_variables_initializer()
+    with self.test_session() as sess:
+      sess.run([init])
+      r, f, v, _ = sess.run([emb, freqs, versions, train_op])
+      print(f)
+      r, f, v, _ = sess.run([emb, freqs, versions, train_op])
+      r, f, v, _ = sess.run([emb, freqs, versions, train_op])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      freq_answer = [12, 12, 12, 12, 9, 9, 9, 6, 6, 3]
+      for i in range(0, 10):
+        self.assertEqual(f[i], freq_answer[i])
+        self.assertEqual(v[i], 1)
+        for j in range(0, 3):
+          self.assertEqual(r[i][j], r1[i][j])
+
+  def testEmbeddingVariableForGetFreqsAndVersions(self):
+    print("testEmbeddingVariableForGetFreqsAndVersions")
+    ev_option = variables.EmbeddingVariableOption(record_freq=True, record_version=True)
+    embedding = variable_scope.get_embedding_variable("var_dist",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4,
+                                          ev_option=ev_option)
+    embedding1 = variable_scope.get_embedding_variable("var_dist1",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4)
+
+    emb, freqs, versions = embedding_ops.embedding_lookup(embedding, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64), get_freqs=True, get_versions=True)
+    print(freqs)
+    emb1 = embedding_ops.embedding_lookup(embedding1, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+    gs = training_util.get_or_create_global_step()
+    train_op = adagrad.AdagradOptimizer(0.1).minimize(loss, global_step=gs)
+    fun1 = math_ops.multiply(emb1, 2.0, name='multiply')
+    loss1 = math_ops.reduce_sum(fun1, name='reduce_sum')
+    train_op1 = adagrad.AdagradOptimizer(0.1).minimize(loss1, global_step=gs)
+    init = variables.global_variables_initializer()
+    with self.test_session() as sess:
+      sess.run([init])
+      r, f, v, _ = sess.run([emb, freqs, versions, train_op])
+      r, f, v, _ = sess.run([emb, freqs, versions, train_op])
+      r, f, v, _ = sess.run([emb, freqs, versions, train_op])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      freq_answer = [12, 12, 12, 12, 9, 9, 9, 6, 6, 3]
+      for i in range(0, 10):
+        self.assertEqual(f[i], freq_answer[i])
+        self.assertEqual(v[i], 1)
+        for j in range(0, 3):
+          self.assertEqual(r[i][j], r1[i][j])
+  
+  def testEmbeddingVariableForGeVersions(self):
+    print("testEmbeddingVariableForGetVersions")
+    ev_option = variables.EmbeddingVariableOption(record_version=True)
+    embedding = variable_scope.get_embedding_variable("var_dist",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          ev_option=ev_option)
+    embedding1 = variable_scope.get_embedding_variable("var_dist1",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer)
+
+    emb, versions = embedding_ops.embedding_lookup(embedding, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64), get_versions=True)
+    emb1 = embedding_ops.embedding_lookup(embedding1, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+    gs = training_util.get_or_create_global_step()
+    train_op = adagrad.AdagradOptimizer(0.1).minimize(loss, global_step=gs)
+    fun1 = math_ops.multiply(emb1, 2.0, name='multiply')
+    loss1 = math_ops.reduce_sum(fun1, name='reduce_sum')
+    train_op1 = adagrad.AdagradOptimizer(0.1).minimize(loss1, global_step=gs)
+    init = variables.global_variables_initializer()
+    with self.test_session() as sess:
+      sess.run([init])
+      r, v, _ = sess.run([emb, versions, train_op])
+      r, v, _ = sess.run([emb, versions, train_op])
+      r, v, _ = sess.run([emb, versions, train_op])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      for i in range(0, 10):
+        self.assertEqual(v[i], 1)
+        for j in range(0, 3):
+          self.assertEqual(r[i][j], r1[i][j])
+
+  def testEmbeddingVariableForGetFreqs(self):
+    print("testEmbeddingVariableForGetFreqs")
+    ev_option = variables.EmbeddingVariableOption(record_freq=True)
+    embedding = variable_scope.get_embedding_variable("var_dist",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4,
+                                          ev_option=ev_option)
+    embedding1 = variable_scope.get_embedding_variable("var_dist1",
+                                          embedding_dim=6,
+                                          initializer=init_ops.ones_initializer,
+                                          steps_to_live = 4)
+
+    emb, freqs = embedding_ops.embedding_lookup(embedding, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64), get_freqs=True)
+    emb1 = embedding_ops.embedding_lookup(embedding1, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+    gs = training_util.get_or_create_global_step()
+    train_op = adagrad.AdagradOptimizer(0.1).minimize(loss, global_step=gs)
+    fun1 = math_ops.multiply(emb1, 2.0, name='multiply')
+    loss1 = math_ops.reduce_sum(fun1, name='reduce_sum')
+    train_op1 = adagrad.AdagradOptimizer(0.1).minimize(loss1, global_step=gs)
+    init = variables.global_variables_initializer()
+    with self.test_session() as sess:
+      sess.run([init])
+      r, f, _ = sess.run([emb, freqs, train_op])
+      r, f, _ = sess.run([emb, freqs, train_op])
+      r, f, _ = sess.run([emb, freqs, train_op])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      r1, _ = sess.run([emb1, train_op1])
+      freq_answer = [12, 12, 12, 12, 9, 9, 9, 6, 6, 3]
+      for i in range(0, 10):
+        self.assertEqual(f[i], freq_answer[i])
+        for j in range(0, 3):
+          self.assertEqual(r[i][j], r1[i][j])
+  
   def testEmbeddingVariableForLookupInt64(self):
     print("testEmbeddingVariableForLookupInt64")
     var = variable_scope.get_embedding_variable("var_1",
@@ -1380,7 +1729,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
                                    initializer=init_ops.glorot_uniform_initializer(seed = 3))
       emb1 = runTest(self, emb_var, g)
       emb2 = runTest(self, var, g)
-
+  
       for i in range(0, 6):
         for j in range(0, 6):
           self.assertEqual(emb1.tolist()[i][j], emb2.tolist()[i][j])

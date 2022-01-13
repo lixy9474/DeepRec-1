@@ -3871,7 +3871,9 @@ def gather(params,
            axis=None,
            batch_dims=0,
            ev_init_value=None,
-           counts=None):  # pylint: disable=g-doc-args
+           counts=None,
+           get_freqs=False,
+           get_versions=False):  # pylint: disable=g-doc-args
   r"""Gather slices from params axis axis according to indices.
 
   Gather slices from params axis `axis` according to `indices`.  `indices` must
@@ -3955,7 +3957,7 @@ def gather(params,
     from tensorflow.python.ops import kv_variable_ops
     if isinstance(params, kv_variable_ops.EmbeddingVariable):
       return params.sparse_read(indices, name=name, ev_init_value=ev_init_value,
-        counts=counts)
+        counts=counts, get_freqs=get_freqs, get_versions=get_versions)
     else:
       return params.sparse_read(indices, name=name, ev_init_value=ev_init_value)
 

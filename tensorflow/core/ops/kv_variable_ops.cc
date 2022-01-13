@@ -147,6 +147,8 @@ REGISTER_OP("InitializeKvVariableOp")
     .Attr("layout: string = 'normal'")
     .Attr("storage_type: int = 1")
     .Attr("default_value_dim: int = 4096")
+    .Attr("record_freq: bool = false")
+    .Attr("record_version: bool = false")
     .SetShapeFn([](InferenceContext* c) { 
       return Status::OK();
     })
@@ -227,6 +229,8 @@ REGISTER_OP("KvResourceGatherV1")
     .Input("counts: counts_type")
     .Attr("is_use_default_value_tensor: bool = false")
     .Attr("validate_indices: bool = true")
+    .Attr("get_freqs: bool=false")
+    .Attr("get_versions: bool=false")
     .Output("output: dtype")
     .Attr("dtype: type")
     .Attr("Tkeys: {int64,int32,string}")
@@ -268,15 +272,223 @@ Produces an output tensor with shape `indices.shape + params.shape[1:]` where:
 
 )doc");
 
+REGISTER_OP("KvResourceGatherV1TwoOutputs")
+    .Input("resource: resource")
+    .Input("indices: Tkeys")
+    .Input("default_value: dtype")
+    .Input("counts: counts_type")
+    .Attr("validate_indices: bool = true")
+    .Attr("is_use_default_value_tensor: bool = false")
+    .Output("output: dtype")
+    .Output("output1: int64")
+    .Attr("get_freqs: bool=false")
+    .Attr("get_versions: bool=false")
+    .Attr("dtype: type")
+    .Attr("Tkeys: {int64,string}")
+    .Attr("counts_type: {int32, int64} = DT_INT32")
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeAndType handle_shape_and_type;
+      TF_RETURN_IF_ERROR(
+          ValidateVariableResourceHandle(c, &handle_shape_and_type));
+
+      ShapeHandle unused;
+      TF_RETURN_IF_ERROR(
+          c->WithRankAtLeast(handle_shape_and_type.shape, 1, &unused));
+      ShapeHandle params_subshape;
+	  params_subshape = handle_shape_and_type.shape;
+      //TF_RETURN_IF_ERROR(
+      //    c->Subshape(handle_shape_and_type.shape, 1, &params_subshape));
+      ShapeHandle indices_shape = c->input(1);
+      ShapeHandle out;
+      TF_RETURN_IF_ERROR(c->Concatenate(indices_shape, params_subshape, &out));
+      c->set_output(0, out);
+      return Status::OK();
+    })
+    .Doc(R"doc(
+Gather slices from the variable pointed to by `resource` according to `indices`.
+
+`indices` must be an integer tensor of any dimension (usually 0-D or 1-D).
+Produces an output tensor with shape `indices.shape + params.shape[1:]` where:
+
+```python
+    # Scalar indices
+    output[:, ..., :] = params[indices, :, ... :]
+
+    # Vector indices
+    output[i, :, ..., :] = params[indices[i], :, ... :]
+
+    # Higher rank indices
+    output[i, ..., j, :, ... :] = params[indices[i, ..., j], :, ..., :]
+```
+
+)doc");
+
+REGISTER_OP("KvResourceGatherV1ThreeOutputs")
+    .Input("resource: resource")
+    .Input("indices: Tkeys")
+    .Input("default_value: dtype")
+    .Input("counts: counts_type")
+    .Attr("validate_indices: bool = true")
+    .Attr("is_use_default_value_tensor: bool = false")
+    .Output("output: dtype")
+    .Output("output1: int64")
+    .Output("output2: int64")
+    .Attr("get_freqs: bool=false")
+    .Attr("get_versions: bool=false")
+    .Attr("dtype: type")
+    .Attr("Tkeys: {int64,string}")
+    .Attr("counts_type: {int32, int64} = DT_INT32")
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeAndType handle_shape_and_type;
+      TF_RETURN_IF_ERROR(
+          ValidateVariableResourceHandle(c, &handle_shape_and_type));
+
+      ShapeHandle unused;
+      TF_RETURN_IF_ERROR(
+          c->WithRankAtLeast(handle_shape_and_type.shape, 1, &unused));
+      ShapeHandle params_subshape;
+	  params_subshape = handle_shape_and_type.shape;
+      //TF_RETURN_IF_ERROR(
+      //    c->Subshape(handle_shape_and_type.shape, 1, &params_subshape));
+      ShapeHandle indices_shape = c->input(1);
+      ShapeHandle out;
+      TF_RETURN_IF_ERROR(c->Concatenate(indices_shape, params_subshape, &out));
+      c->set_output(0, out);
+      return Status::OK();
+    })
+    .Doc(R"doc(
+Gather slices from the variable pointed to by `resource` according to `indices`.
+
+`indices` must be an integer tensor of any dimension (usually 0-D or 1-D).
+Produces an output tensor with shape `indices.shape + params.shape[1:]` where:
+
+```python
+    # Scalar indices
+    output[:, ..., :] = params[indices, :, ... :]
+
+    # Vector indices
+    output[i, :, ..., :] = params[indices[i], :, ... :]
+
+    # Higher rank indices
+    output[i, ..., j, :, ... :] = params[indices[i, ..., j], :, ..., :]
+```
+
+)doc");
+
+
 REGISTER_OP("KvResourceGather")
     .Input("resource: resource")
     .Input("indices: Tkeys")
     .Input("default_value: dtype")
     .Attr("is_use_default_value_tensor: bool = false")
     .Attr("validate_indices: bool = true")
+    .Attr("get_freqs: bool=false")
+    .Attr("get_versions: bool=false")
     .Output("output: dtype")
     .Attr("dtype: type")
     .Attr("Tkeys: {int64,int32,string}")
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeAndType handle_shape_and_type;
+      TF_RETURN_IF_ERROR(
+          ValidateVariableResourceHandle(c, &handle_shape_and_type));
+
+      ShapeHandle unused;
+      TF_RETURN_IF_ERROR(
+          c->WithRankAtLeast(handle_shape_and_type.shape, 1, &unused));
+      ShapeHandle params_subshape;
+	  params_subshape = handle_shape_and_type.shape;
+      //TF_RETURN_IF_ERROR(
+      //    c->Subshape(handle_shape_and_type.shape, 1, &params_subshape));
+      ShapeHandle indices_shape = c->input(1);
+      ShapeHandle out;
+      TF_RETURN_IF_ERROR(c->Concatenate(indices_shape, params_subshape, &out));
+      c->set_output(0, out);
+      return Status::OK();
+    })
+    .Doc(R"doc(
+Gather slices from the variable pointed to by `resource` according to `indices`.
+
+`indices` must be an integer tensor of any dimension (usually 0-D or 1-D).
+Produces an output tensor with shape `indices.shape + params.shape[1:]` where:
+
+```python
+    # Scalar indices
+    output[:, ..., :] = params[indices, :, ... :]
+
+    # Vector indices
+    output[i, :, ..., :] = params[indices[i], :, ... :]
+
+    # Higher rank indices
+    output[i, ..., j, :, ... :] = params[indices[i, ..., j], :, ..., :]
+```
+
+)doc");
+
+REGISTER_OP("KvResourceGatherTwoOutputs")
+    .Input("resource: resource")
+    .Input("indices: Tkeys")
+    .Input("default_value: dtype")
+    .Attr("validate_indices: bool = true")
+    .Attr("is_use_default_value_tensor: bool = false")
+    .Output("output: dtype")
+    .Output("output1: int64")
+    .Attr("get_freqs: bool=false")
+    .Attr("get_versions: bool=false")
+    .Attr("dtype: type")
+    .Attr("Tkeys: {int64,string}")
+    //.Attr("Tfreqs:{int64}")
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeAndType handle_shape_and_type;
+      TF_RETURN_IF_ERROR(
+          ValidateVariableResourceHandle(c, &handle_shape_and_type));
+
+      ShapeHandle unused;
+      TF_RETURN_IF_ERROR(
+          c->WithRankAtLeast(handle_shape_and_type.shape, 1, &unused));
+      ShapeHandle params_subshape;
+	  params_subshape = handle_shape_and_type.shape;
+      //TF_RETURN_IF_ERROR(
+      //    c->Subshape(handle_shape_and_type.shape, 1, &params_subshape));
+      ShapeHandle indices_shape = c->input(1);
+      ShapeHandle out;
+      TF_RETURN_IF_ERROR(c->Concatenate(indices_shape, params_subshape, &out));
+      c->set_output(0, out);
+      return Status::OK();
+    })
+    .Doc(R"doc(
+Gather slices from the variable pointed to by `resource` according to `indices`.
+
+`indices` must be an integer tensor of any dimension (usually 0-D or 1-D).
+Produces an output tensor with shape `indices.shape + params.shape[1:]` where:
+
+```python
+    # Scalar indices
+    output[:, ..., :] = params[indices, :, ... :]
+
+    # Vector indices
+    output[i, :, ..., :] = params[indices[i], :, ... :]
+
+    # Higher rank indices
+    output[i, ..., j, :, ... :] = params[indices[i, ..., j], :, ..., :]
+```
+
+)doc");
+
+REGISTER_OP("KvResourceGatherThreeOutputs")
+    .Input("resource: resource")
+    .Input("indices: Tkeys")
+    .Input("default_value: dtype")
+    .Attr("validate_indices: bool = true")
+    .Attr("is_use_default_value_tensor: bool = false")
+    .Output("output: dtype")
+    .Output("output1: int64")
+    .Output("output2: int64")
+    .Attr("get_freqs: bool=false")
+    .Attr("get_versions: bool=false")
+    .Attr("dtype: type")
+    .Attr("Tkeys: {int64,string}")
+    //.Attr("Tfreqs:{int64}")
+
     .SetShapeFn([](InferenceContext* c) {
       ShapeAndType handle_shape_and_type;
       TF_RETURN_IF_ERROR(
@@ -425,6 +637,8 @@ REGISTER_OP("KvResourceImportV2")
     .Attr("max_freq: int = 999999")
     .Attr("storage_type: int = 1")
     .Attr("default_value_dim: int = 4096")
+    .Attr("record_freq: bool = false")
+    .Attr("record_version: bool = false")
     .SetShapeFn([](InferenceContext* c) {
           ShapeHandle handle;
           TF_RETURN_IF_ERROR(c->WithRank(c->input(0), 0, &handle));

@@ -419,7 +419,7 @@ TEST(EmbeddingVariableTest, TestEVExportLarge) {
 
   int64 ev_size = 10048576;
   for (int64 i = 0; i < ev_size; i++) {
-    variable->LookupOrCreate(i, fill_v, nullptr);
+    variable->LookupOrCreate(i, fill_v, nullptr, 1, false, false, nullptr, nullptr, false);
   }
 
   LOG(INFO) << "size:" << variable->Size();
@@ -592,8 +592,8 @@ TEST(EmbeddingVariableTest, TestMultiInsertion) {
 void InsertAndLookup(EmbeddingVar<int64, int64>* variable, int64 *keys, long ReadLoops, int value_size){
   for (long j = 0; j < ReadLoops; j++) {
     int64 *val = (int64 *)malloc((value_size+1)*sizeof(int64));
-    variable->LookupOrCreate(keys[j], val, &(keys[j]));
-    variable->LookupOrCreate(keys[j], val, (&keys[j]+1));
+    variable->LookupOrCreate(keys[j], val, &(keys[j]), 1, false, false, nullptr, nullptr, false);
+    variable->LookupOrCreate(keys[j], val, (&keys[j]+1), 1, false, false, nullptr, nullptr, false);
     ASSERT_EQ(keys[j] , val[0]);
     free(val);
   }
@@ -602,7 +602,7 @@ void InsertAndLookup(EmbeddingVar<int64, int64>* variable, int64 *keys, long Rea
 void MultiBloomFilter(EmbeddingVar<int64, float>* var, int value_size, int64 i) {
   for (long j = 0; j < 1; j++) {
     float *val = (float *)malloc((value_size+1)*sizeof(float));
-    var->LookupOrCreate(i+1, val, nullptr);
+    var->LookupOrCreate(i+1, val, nullptr, 1, false, false, nullptr, nullptr, false);
   }
 }
 
@@ -622,11 +622,11 @@ TEST(EmbeddingVariableTest, TestBloomFilter) {
 
   float *val = (float *)malloc((value_size+1)*sizeof(float));
   float *default_value = (float *)malloc((value_size+1)*sizeof(float));
-  var->LookupOrCreate(1, val, default_value);
-  var->LookupOrCreate(1, val, default_value);
-  var->LookupOrCreate(1, val, default_value);
-  var->LookupOrCreate(1, val, default_value);
-  var->LookupOrCreate(2, val, default_value);
+  var->LookupOrCreate(1, val, default_value, 1, false, false, nullptr, nullptr, false);
+  var->LookupOrCreate(1, val, default_value, 1, false, false, nullptr, nullptr, false);
+  var->LookupOrCreate(1, val, default_value, 1, false, false, nullptr, nullptr, false);
+  var->LookupOrCreate(1, val, default_value, 1, false, false, nullptr, nullptr, false);
+  var->LookupOrCreate(2, val, default_value, 1, false, false, nullptr, nullptr, false);
   
   std::vector<int64> keylist;
   std::vector<float *> valuelist;
@@ -980,7 +980,7 @@ TEST(EmbeddingVariableTest, TestFeatureFilter) {
   float *val = (float *)malloc((value_size+1)*sizeof(float));
 
   for (int i = 0; i < 7; i++) {
-    var->LookupOrCreate(20, val, nullptr);
+    var->LookupOrCreate(20, val, nullptr, 1, false, false, nullptr, nullptr, false);
     ValuePtr<float>* value_ptr = nullptr;
     var->LookupOrCreateKey(20, &value_ptr);
     if (i < 4) {
@@ -996,7 +996,7 @@ TEST(EmbeddingVariableTest, TestFeatureFilter) {
   std::vector<int64> freq_list;
 
    
-  var->LookupOrCreate(30, val, nullptr);
+  var->LookupOrCreate(30, val, nullptr, 1, false, false, nullptr, nullptr, false);
   var->GetSnapshot(&keylist, &valuelist, &version_list, &freq_list);
   ASSERT_EQ(var->Size(), 2);  
   ASSERT_EQ(keylist.size(), 1);
@@ -1005,7 +1005,7 @@ TEST(EmbeddingVariableTest, TestFeatureFilter) {
 
 void MultiFilter(EmbeddingVar<int64, float>* variable, int value_size) {
   float *val = (float *)malloc((value_size+1)*sizeof(float));
-  variable->LookupOrCreate(20, val, nullptr);
+  variable->LookupOrCreate(20, val, nullptr, 1, false, false, nullptr, nullptr, false);
 }
 
 TEST(EmbeddingVariableTest, TestFeatureFilterParallel) {
@@ -1107,7 +1107,7 @@ void BM_MULTIREAD(int iters, int thread_num) {
   float* fill_v = (float*)malloc(value_size * sizeof(float));
 
   for (int64 i = 0; i < InsertLoop; i++){
-    variable->LookupOrCreate(i, fill_v, nullptr);
+    variable->LookupOrCreate(i, fill_v, nullptr, 1, false, false, nullptr, nullptr, false);
   }
 
   testing::StartTiming();
@@ -1124,7 +1124,7 @@ void BM_MULTIREAD(int iters, int thread_num) {
 void hybrid_process(EmbeddingVar<int64, float>* variable, int64* keys, int64 InsertLoop, int thread_num, int64 i, int64 value_size) {
   float *val = (float *)malloc(sizeof(float)*(value_size + 1));
   for (int64 j = i * InsertLoop/thread_num; j < (i+1) * InsertLoop/thread_num; j++) {
-    variable->LookupOrCreate(keys[j], val, nullptr);
+    variable->LookupOrCreate(keys[j], val, nullptr, 1, false, false, nullptr, nullptr, false);
   }
 }
 
@@ -1244,7 +1244,7 @@ TEST(EmbeddingVariableTest, TestEVStorageType_DRAM) {
 
   int64 ev_size = 100;
   for (int64 i = 0; i < ev_size; i++) {
-    variable->LookupOrCreate(i, fill_v, nullptr);
+    variable->LookupOrCreate(i, fill_v, nullptr, 1, false, false, nullptr, nullptr, false);
   }
 
   LOG(INFO) << "size:" << variable->Size();

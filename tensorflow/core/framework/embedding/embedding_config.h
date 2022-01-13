@@ -21,6 +21,8 @@ struct EmbeddingConfig {
   DataType counter_type;
   embedding::StorageType storage_type;
   int64 default_value_dim;
+  bool record_freq;
+  bool record_version;
 
   EmbeddingConfig(int64 emb_index = 0, int64 primary_emb_index = 0,
                   int64 block_num = 1, int slot_num = 1,
@@ -29,7 +31,7 @@ struct EmbeddingConfig {
                   float l2_weight_threshold = -1.0, const std::string& layout = "normal",
                   int64 max_element_size = 0, float false_positive_probability = -1.0,
                   DataType counter_type = DT_UINT64, embedding::StorageType storage_type = embedding::DRAM,
-                  int64 default_value_dim = 4096):
+                  int64 default_value_dim = 4096, bool record_freq = false, bool record_version = false):
       emb_index(emb_index),
       primary_emb_index(primary_emb_index),
       block_num(block_num),
@@ -41,7 +43,9 @@ struct EmbeddingConfig {
       l2_weight_threshold(l2_weight_threshold),
       counter_type(counter_type),
       storage_type(storage_type),
-      default_value_dim(default_value_dim) {
+      default_value_dim(default_value_dim),
+      record_freq(record_freq),
+      record_version(record_version) {
     if ("normal" == layout) {
       layout_type = LayoutType::NORMAL;
     } else if ("light" == layout) {

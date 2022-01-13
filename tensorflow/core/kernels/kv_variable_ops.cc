@@ -142,6 +142,9 @@ class InitializeKvVariableOp : public OpKernel {
     
     OP_REQUIRES_OK(c, c->GetAttr("default_value_dim", &default_value_dim_));
 
+    OP_REQUIRES_OK(c, c->GetAttr("record_freq", &record_freq_));
+    OP_REQUIRES_OK(c, c->GetAttr("record_version", &record_version_));
+
     int64 storage_type = 0;
     OP_REQUIRES_OK(c, c->GetAttr("storage_type", &storage_type));
     storage_type_ = static_cast<embedding::StorageType>(storage_type);
@@ -199,7 +202,8 @@ class InitializeKvVariableOp : public OpKernel {
                                          steps_to_live_, filter_freq_, max_freq_,
                                          l2_weight_threshold_, layout_,
                                          max_element_size_, false_positive_probability_,
-                                         counter_type_, storage_type_, default_value_dim_));
+                                         counter_type_, storage_type_, default_value_dim_, 
+                                         record_freq_, record_version_));
             return (*ptr)->Init(default_values, default_value_dim_);
             }));
     } else {
@@ -220,7 +224,7 @@ class InitializeKvVariableOp : public OpKernel {
                                         steps_to_live_, filter_freq_, max_freq_,
                                         l2_weight_threshold_, layout_,
                                         max_element_size_, false_positive_probability_,
-                                        counter_type_, storage_type_));
+                                        counter_type_, storage_type_, 4096, record_freq_, record_version_));
             return (*ptr)->Init();
            }));
 
@@ -266,6 +270,8 @@ class InitializeKvVariableOp : public OpKernel {
   float false_positive_probability_;
   embedding::StorageType storage_type_;
   int64 default_value_dim_;
+  bool record_freq_;
+  bool record_version_;
 };
 
 #define REGISTER_KERNELS(ktype, vtype)                               \
@@ -318,6 +324,8 @@ class KvResourceGatherOp : public OpKernel {
  public:
   explicit KvResourceGatherOp(OpKernelConstruction* c) : OpKernel(c) {
     OP_REQUIRES_OK(c, c->GetAttr("is_use_default_value_tensor", &is_use_default_value_tensor_));
+    OP_REQUIRES_OK(c, c->GetAttr("get_freqs", &get_freqs_));
+    OP_REQUIRES_OK(c, c->GetAttr("get_versions", &get_versions_));
   }
 
   void Compute(OpKernelContext* c) override {
@@ -326,6 +334,7 @@ class KvResourceGatherOp : public OpKernel {
     core::ScopedUnref unref_me(ev);
     const Tensor& indices = c->input(1);
     const int64 N = indices.NumElements();
+    
 
     TensorShape result_shape = indices.shape();
     TensorShape value_shape({ev->ValueLen()});
@@ -334,9 +343,27 @@ class KvResourceGatherOp : public OpKernel {
     Tensor* out = nullptr;
     OP_REQUIRES_OK(c, c->allocate_output(0, result_shape, &out));
 
+    std::vector<Tensor*> extra_outputs;
+    for (int i = 1; i < 3; i++) {
+      extra_outputs.emplace_back(nullptr);
+    }
+    //LOG(INFO)<<c->num_outputs();
+    for (int i = 1 ; i < c->num_outputs(); i++) {
+      OP_REQUIRES_OK(c, c->allocate_output(i, indices.shape(), &extra_outputs[i-1]));
+      //LOG(INFO)<<extra_outputs[i-1];
+    }
     if (N > 0) {
       auto out_flat = out->shaped<TValue, 2>({N, out->NumElements() / N});
       TValue* out_base = &out_flat(0, 0);
+      std::vector<int64*> extra_out_base;
+      for (int i = 0; i < 2; i++) {
+        if (extra_outputs[i] != nullptr) {
+          auto temp = extra_outputs[i]->flat<int64>();
+          extra_out_base.emplace_back(&temp(0));
+        } else {
+          extra_out_base.emplace_back(nullptr);
+        }
+      }
 
       const int32* counts = nullptr;
       bool is_unique = false;
@@ -355,46 +382,43 @@ class KvResourceGatherOp : public OpKernel {
               "ev's value_len should same with output's dimension(1)",
               std::to_string(slice_elems), std::to_string(ev->ValueLen())));
       const size_t slice_bytes = slice_elems * sizeof(TValue);
+      Tensor default_values(c->input(2));
+      auto default_values_matrix = default_values.shaped<TValue, 2>({2, 1});
       if (is_use_default_value_tensor_) {
-        Tensor default_values(c->input(2));
-        auto default_values_matrix = default_values.shaped<TValue, 2>(
-            {default_values.NumElements()/ev->ValueLen(), ev->ValueLen()});     
-        auto do_work = [this, indices_flat,
-             out_base, slice_elems, c, ev, default_values_matrix, counts] (int64 start, int64 limit) {
-          for (int64 i = start; i < limit; ++i) {
-            TValue* default_v;
-            int64 count = (counts == nullptr) ? 1 : counts[i];
-            default_v = &default_values_matrix(i, 0);
-            ev->LookupOrCreate(indices_flat(i),
-                out_base + i * slice_elems, default_v, count);          
-          }
-        };
-
-        auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
-        Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
-            slice_bytes, do_work);
-      } else {
-        auto do_work = [this, indices_flat,
-             out_base, slice_elems, c, ev, counts] (int64 start, int64 limit) {
-          for (int64 i = start; i < limit; ++i) {
-            TValue* default_v;
-            int64 count = (counts == nullptr) ? 1 : counts[i];
-            default_v = ev->GetDefaultValuePtr() +
-                          ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
-            ev->LookupOrCreate(indices_flat(i),
-                out_base + i * slice_elems, default_v, count);          
-          }
-        };
-
-        auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
-        Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
-            slice_bytes, do_work);
+        default_values_matrix = default_values.shaped<TValue, 2>(
+            {default_values.NumElements()/ev->ValueLen(), ev->ValueLen()});
       }
+      auto do_work = [this, indices_flat,
+           out_base, slice_elems, c, ev, default_values_matrix, counts, extra_out_base, is_unique] (int64 start, int64 limit) {
+        for (int64 i = start; i < limit; ++i) {
+          TValue* default_v;
+          int64 count = (counts == nullptr) ? 1 : counts[i];
+          int64* out0_ptr = (extra_out_base[0] == nullptr) ? nullptr : extra_out_base[0]+i;
+          int64* out1_ptr = (extra_out_base[1] == nullptr) ? nullptr : extra_out_base[1]+i;
+          default_v = (is_use_default_value_tensor_) ? &default_values_matrix(i, 0) : ev->GetDefaultValuePtr() +
+                        ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
+          ev->LookupOrCreate(indices_flat(i),
+              out_base + i * slice_elems, default_v, count,
+              get_freqs_, get_versions_, out0_ptr, out1_ptr, is_unique);          
+        }
+      };
+      auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
+      Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
+          slice_bytes, do_work);
+      if (!is_unique && c->num_outputs() > 1) {
+        for (int i = 0; i < N; i++) {
+          int64* out0_ptr = (extra_out_base[0] == nullptr) ? nullptr : extra_out_base[0]+i;
+          int64* out1_ptr = (extra_out_base[1] == nullptr) ? nullptr : extra_out_base[1]+i;
+          ev->LookupFreqAndVersion(indices_flat(i), out0_ptr, out1_ptr, get_freqs_, get_versions_);
+        }
+      }    
     }
   }
 
   private:
     bool is_use_default_value_tensor_;
+    bool get_freqs_;
+    bool get_versions_;
 };
 
 #define REGISTER_GATHER_FULL(dev, ktype, vtype)                   \
@@ -423,6 +447,59 @@ TF_CALL_double(REGISTER_GATHER_CPU);
 #undef REGISTER_GATHER_ALL_INDICES
 #undef REGISTER_GATHER_FULL
 
+#define REGISTER_GATHER_TWO_FULL(dev, ktype, vtype)               \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceGatherTwoOutputs")       \
+                              .Device(DEVICE_##dev)               \
+                              .HostMemory("resource")             \
+                              .HostMemory("indices")              \
+                              .HostMemory("default_value")        \
+                              .HostMemory("output")               \
+                              .HostMemory("output1")              \
+                              .TypeConstraint<vtype>("dtype")     \
+                              .TypeConstraint<ktype>("Tkeys"),    \
+                          KvResourceGatherOp<ktype, vtype>)
+
+#define REGISTER_GATHER_TWO_ALL_INDICES(dev, type) \
+  REGISTER_GATHER_TWO_FULL(dev, int32, type);      \
+  REGISTER_GATHER_TWO_FULL(dev, int64, type)
+
+#define REGISTER_GATHER_TWO_CPU(type) REGISTER_GATHER_TWO_ALL_INDICES(CPU, type)
+
+// Registration of the CPU implementations.
+TF_CALL_ALL_TYPES(REGISTER_GATHER_TWO_CPU);
+TF_CALL_QUANTIZED_TYPES(REGISTER_GATHER_TWO_CPU);
+
+#undef REGISTER_GATHER_TWO_CPU
+#undef REGISTER_GATHER_TWO_ALL_INDICES
+#undef REGISTER_GATHER_TWO_FULL
+
+#define REGISTER_GATHER_THREE_FULL(dev, ktype, vtype)             \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceGatherThreeOutputs")     \
+                              .Device(DEVICE_##dev)               \
+                              .HostMemory("resource")             \
+                              .HostMemory("indices")              \
+                              .HostMemory("default_value")        \
+                              .HostMemory("output")               \
+                              .HostMemory("output1")              \
+                              .HostMemory("output2")              \
+                              .TypeConstraint<vtype>("dtype")     \
+                              .TypeConstraint<ktype>("Tkeys"),    \
+                          KvResourceGatherOp<ktype, vtype>)
+
+#define REGISTER_GATHER_THREE_ALL_INDICES(dev, type) \
+  REGISTER_GATHER_THREE_FULL(dev, int32, type);      \
+  REGISTER_GATHER_THREE_FULL(dev, int64, type)
+
+#define REGISTER_GATHER_THREE_CPU(type) REGISTER_GATHER_THREE_ALL_INDICES(CPU, type)
+
+// Registration of the CPU implementations.
+TF_CALL_ALL_TYPES(REGISTER_GATHER_THREE_CPU);
+TF_CALL_QUANTIZED_TYPES(REGISTER_GATHER_THREE_CPU);
+
+#undef REGISTER_GATHER_THREE_CPU
+#undef REGISTER_GATHER_THREE_ALL_INDICES
+#undef REGISTER_GATHER_THREE_FULL
+
 #define REGISTER_GATHER_FULL(dev, ktype, vtype)                   \
   REGISTER_KERNEL_BUILDER(Name("KvResourceGatherV1")                \
                               .Device(DEVICE_##dev)               \
@@ -449,6 +526,61 @@ TF_CALL_double(REGISTER_GATHER_CPU);
 #undef REGISTER_GATHER_CPU
 #undef REGISTER_GATHER_ALL_INDICES
 #undef REGISTER_GATHER_FULL
+
+#define REGISTER_GATHER_V1_TWO_FULL(dev, ktype, vtype)            \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceGatherV1TwoOutputs")     \
+                              .Device(DEVICE_##dev)               \
+                              .HostMemory("resource")             \
+                              .HostMemory("indices")              \
+                              .HostMemory("default_value")        \
+                              .HostMemory("counts")               \
+                              .HostMemory("output")               \
+                              .HostMemory("output1")              \
+                              .TypeConstraint<vtype>("dtype")     \
+                              .TypeConstraint<ktype>("Tkeys"),    \
+                          KvResourceGatherOp<ktype, vtype>)
+
+#define REGISTER_GATHER_V1_TWO_ALL_INDICES(dev, type) \
+  REGISTER_GATHER_V1_TWO_FULL(dev, int32, type);      \
+  REGISTER_GATHER_V1_TWO_FULL(dev, int64, type)
+
+#define REGISTER_GATHER_V1_TWO_CPU(type) REGISTER_GATHER_V1_TWO_ALL_INDICES(CPU, type)
+
+// Registration of the CPU implementations.
+TF_CALL_ALL_TYPES(REGISTER_GATHER_V1_TWO_CPU);
+TF_CALL_QUANTIZED_TYPES(REGISTER_GATHER_V1_TWO_CPU);
+
+#undef REGISTER_GATHER_V1_TWO_CPU
+#undef REGISTER_GATHER_V1_TWO_ALL_INDICES
+#undef REGISTER_GATHER_V1_TWO_FULL
+
+#define REGISTER_GATHER_V1_THREE_FULL(dev, ktype, vtype)          \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceGatherV1ThreeOutputs")   \
+                              .Device(DEVICE_##dev)               \
+                              .HostMemory("resource")             \
+                              .HostMemory("indices")              \
+                              .HostMemory("default_value")        \
+                              .HostMemory("counts")               \
+                              .HostMemory("output")               \
+                              .HostMemory("output1")              \
+                              .HostMemory("output2")              \
+                              .TypeConstraint<vtype>("dtype")     \
+                              .TypeConstraint<ktype>("Tkeys"),    \
+                          KvResourceGatherOp<ktype, vtype>)
+
+#define REGISTER_GATHER_V1_THREE_ALL_INDICES(dev, type) \
+  REGISTER_GATHER_V1_THREE_FULL(dev, int32, type);      \
+  REGISTER_GATHER_V1_THREE_FULL(dev, int64, type)
+
+#define REGISTER_GATHER_V1_THREE_CPU(type) REGISTER_GATHER_V1_THREE_ALL_INDICES(CPU, type)
+
+// Registration of the CPU implementations.
+TF_CALL_ALL_TYPES(REGISTER_GATHER_V1_THREE_CPU);
+TF_CALL_QUANTIZED_TYPES(REGISTER_GATHER_V1_THREE_CPU);
+
+#undef REGISTER_GATHER_V1_THREE_CPU
+#undef REGISTER_GATHER_V1_THREE_ALL_INDICES
+#undef REGISTER_GATHER_V1_THREE_FULL
 /*
 // Op that outputs tensors of all keys and all values.
 template <typename TKey, typename TValue>
@@ -559,6 +691,9 @@ class KvResourceImportV2Op: public OpKernel {
     OP_REQUIRES_OK(c, c->GetAttr("max_freq", &max_freq_));
     OP_REQUIRES_OK(c, c->GetAttr("default_value_dim", &default_value_dim_));
 
+    OP_REQUIRES_OK(c, c->GetAttr("record_freq", &record_freq_));
+    OP_REQUIRES_OK(c, c->GetAttr("record_version", &record_version_));
+
     int64 storage_type = 0;
     OP_REQUIRES_OK(c, c->GetAttr("storage_type", &storage_type));
     storage_type_ = static_cast<embedding::StorageType>(storage_type);
@@ -602,7 +737,8 @@ class KvResourceImportV2Op: public OpKernel {
                                          steps_to_live_, filter_freq_,
                                          max_freq_, l2_weight_threshold_,
                                          layout_,  max_element_size_, false_positive_probability_,
-                                         counter_type_, storage_type_, default_value_dim_));
+                                         counter_type_, storage_type_, default_value_dim_,
+                                         record_freq_, record_version_));
              return (*ptr)->Init(default_values, default_value_dim_);
             }));
     } else {
@@ -623,7 +759,7 @@ class KvResourceImportV2Op: public OpKernel {
                                         steps_to_live_, filter_freq_,
                                         max_freq_, l2_weight_threshold_,
                                         layout_,  max_element_size_, false_positive_probability_,
-                                        counter_type_, storage_type_));
+                                        counter_type_, storage_type_, 4096, record_freq_, record_version_));
             return (*ptr)->Init();
            }));
 
@@ -676,6 +812,8 @@ class KvResourceImportV2Op: public OpKernel {
   int64 max_freq_;
   embedding::StorageType storage_type_;
   int64 default_value_dim_;
+  bool record_freq_;
+  bool record_version_;
 };
 
 #define REGISTER_KERNELS(ktype, vtype)                         \

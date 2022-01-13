@@ -2187,6 +2187,8 @@ def get_embedding_variable(name,
       l2_weight_threshold = ev_option.evict.l2_weight_threshold
   else:
     l2_weight_threshold = -1.0
+  if steps_to_live:
+    ev_option.record_version = True
   if steps_to_live != None and l2_weight_threshold > 0:
       raise ValueError("step_to_live and l2_weight_threshold can't be enabled at same time.")
   return get_variable_scope().get_embedding_variable(
@@ -2201,7 +2203,9 @@ def get_embedding_variable(name,
         l2_weight_threshold=l2_weight_threshold,
         filter_strategy=ev_option.filter_strategy,
         storage_type = ev_option.storage_option.storage_type,
-        default_value_dim=ev_option.init.default_value_dim),
+        default_value_dim=ev_option.init.default_value_dim,
+        record_freq=ev_option.record_freq,
+        record_version=ev_option.record_version),
       ht_partition_num=ev_option.ht_partition_num)
 
 

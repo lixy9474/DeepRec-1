@@ -15,11 +15,11 @@ const static std::vector<int64> default_seeds = {
 template<typename K, typename V, typename EV>
 class EmbeddingFilter {
  public:
-  virtual void LookupOrCreate(K key, V* val, const V* default_value_ptr) = 0;
-  virtual void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count) = 0;
+  virtual void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count, bool get_freqs,
+                               bool get_versions, int64* output0, int64* output1, bool is_unique) = 0;
   virtual Status LookupOrCreateKey(K key, ValuePtr<V>** val, bool* is_filter,
       int update_version = -1) = 0;
-
+  virtual void LookupFreqAndVersion(K key, int64* output0, int64* output1, bool get_freqs, bool get_versions) = 0;
   virtual int64 GetFreq(K key, ValuePtr<V>* value_ptr) = 0;
   virtual int64 GetFreq(K key) = 0;
 };
@@ -53,7 +53,7 @@ class BloomFilter : public EmbeddingFilter<K, V, EV> {
     GenerateSeed(config.kHashFunc);
   }
 
-  void LookupOrCreate(K key, V* val, const V* default_value_ptr) override {
+  /*void LookupOrCreate(K key, V* val, const V* default_value_ptr) override {
     ValuePtr<V>* value_ptr = nullptr;
     if (GetBloomFreq(key) >= config_.filter_freq) {
       TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
@@ -68,18 +68,59 @@ class BloomFilter : public EmbeddingFilter<K, V, EV> {
       else
         memcpy(val, default_value_ptr, sizeof(V) * ev_->ValueLen());  
     }
-  }
+  }*/
 
-  void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count) override {
+  void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count, bool get_freqs=false,
+                       bool get_versions=false, int64* output0=nullptr,
+                       int64* output1=nullptr, bool is_unique=false) override {
     ValuePtr<V>* value_ptr = nullptr;
     if (GetBloomFreq(key) >= config_.filter_freq) {
       TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
       V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
       memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
+      if (config_.record_freq)
+        AddFreq(key, count);
     } else {
       AddFreq(key, count);
       memcpy(val, default_value_ptr, sizeof(V) * ev_->ValueLen());
     }
+    if (output0 && is_unique) {
+      int64 version = value_ptr->GetStep();
+      int64 freq = GetFreq(key);
+      if (output1) {
+        memcpy(output1, &version, sizeof(int64));
+        memcpy(output0, &freq, sizeof(int64));
+      } else {
+        if (get_freqs) {
+          memcpy(output0, &freq, sizeof(int64));
+        }
+        if (get_versions) {
+          memcpy(output0, &version, sizeof(int64));
+        }
+      }
+    }
+  }
+
+  void LookupFreqAndVersion(K key, int64* output0, int64* output1, bool get_freqs, bool get_versions) override {
+    ValuePtr<V>* value_ptr = nullptr;
+    TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
+    if (output0) {
+      if (output1) {
+        int64 version = value_ptr->GetStep();
+        int64 freq = GetFreq(key);
+        memcpy(output1, &version, sizeof(int64));
+        memcpy(output0, &freq, sizeof(int64));
+      } else {
+        if (get_freqs) {
+          int64 freq = GetFreq(key);
+          memcpy(output0, &freq, sizeof(int64));
+        }
+        if (get_versions) {
+          int64 version = value_ptr->GetStep();
+          memcpy(output0, &version, sizeof(int64));
+        }
+      }
+    }  
   }
   
   Status LookupOrCreateKey(K key, ValuePtr<V>** val, bool* is_filter,
@@ -192,7 +233,7 @@ class BloomFilter : public EmbeddingFilter<K, V, EV> {
     }
   }
 
-  void AddFreq(K key) {
+  /*void AddFreq(K key) {
     std::vector<int64> hash_val;
     for (int64 i = 0; i < config_.kHashFunc; i++) {
       hash_val.push_back(FastHash64(key, seeds_[i]) % config_.num_counter);
@@ -221,7 +262,7 @@ class BloomFilter : public EmbeddingFilter<K, V, EV> {
             __sync_fetch_and_add((uint64*)bloom_counter_ + it, 1);
       }
     }
-  }
+  }*/
 
   void AddFreq(K key, int64 count) {
     std::vector<int64> hash_val;
@@ -297,7 +338,7 @@ class CounterFilter : public EmbeddingFilter<K, V, EV> {
       EV* ev) : config_(config), ev_(ev) {
   }
 
-  void LookupOrCreate(K key, V* val, const V* default_value_ptr) override {
+  /*void LookupOrCreate(K key, V* val, const V* default_value_ptr) override {
     ValuePtr<V>* value_ptr = nullptr;
     TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
     if (GetFreq(key, value_ptr) >= config_.filter_freq) {
@@ -312,18 +353,59 @@ class CounterFilter : public EmbeddingFilter<K, V, EV> {
       else
         memcpy(val, default_value_ptr, sizeof(V) * ev_->ValueLen()); 
     }
-  }
+  }*/
 
-  void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count) override {
+  void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count, bool get_freqs=false,
+                       bool get_versions=false, int64* output0=nullptr,
+                       int64* output1=nullptr, bool is_unique=false) override {
     ValuePtr<V>* value_ptr = nullptr;
     TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
     if (GetFreq(key, value_ptr) >= config_.filter_freq) {
       V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
       memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
+      if (config_.record_freq)
+        value_ptr->AddFreq(count);
     } else {
       value_ptr->AddFreq(count);
       memcpy(val, default_value_ptr, sizeof(V) * ev_->ValueLen());
     }
+    if (output0 && is_unique) {
+      int64 version = value_ptr->GetStep();
+      int64 freq = value_ptr->GetFreq();
+      if (output1) {
+        memcpy(output1, &version, sizeof(int64));
+        memcpy(output0, &freq, sizeof(int64));
+      } else {
+        if (get_freqs) {
+          memcpy(output0, &freq, sizeof(int64));
+        }
+        if (get_versions) {
+          memcpy(output0, &version, sizeof(int64));
+        }
+      }
+    }
+  }
+
+  void LookupFreqAndVersion(K key, int64* output0, int64* output1, bool get_freqs, bool get_versions) override {
+    ValuePtr<V>* value_ptr = nullptr;
+    TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
+    if (output0) {
+      if (output1) {
+        int64 version = value_ptr->GetStep();
+        int64 freq = value_ptr->GetFreq();
+        memcpy(output1, &version, sizeof(int64));
+        memcpy(output0, &freq, sizeof(int64));
+      } else {
+        if (get_freqs) {
+          int64 freq = value_ptr->GetFreq();
+          memcpy(output0, &freq, sizeof(int64));
+        }
+        if (get_versions) {
+          int64 version = value_ptr->GetStep();
+          memcpy(output0, &version, sizeof(int64));
+        }
+      }
+    }  
   }
   
   Status LookupOrCreateKey(K key, ValuePtr<V>** val, bool* is_filter,
@@ -355,18 +437,59 @@ class NullableFilter : public EmbeddingFilter<K, V, EV> {
       EV* ev) : config_(config), ev_(ev) {
   }
 
-  void LookupOrCreate(K key, V* val, const V* default_value_ptr) override {
+  /*void LookupOrCreate(K key, V* val, const V* default_value_ptr) override {
     ValuePtr<V>* value_ptr = nullptr;
     TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
     V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
     memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
+  }*/
+
+  void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count, bool get_freqs=false,
+                       bool get_versions=false, int64* output0=nullptr,
+                       int64* output1=nullptr, bool is_unique=false) override {
+    ValuePtr<V>* value_ptr = nullptr;
+    TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
+    V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
+    memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
+    if (config_.record_freq)
+      value_ptr->AddFreq(count);
+    if (output0 && is_unique) {
+      int64 version = value_ptr->GetStep();
+      int64 freq = value_ptr->GetFreq();
+      if (output1) {
+        memcpy(output1, &version, sizeof(int64));
+        memcpy(output0, &freq, sizeof(int64));
+      } else {
+        if (get_freqs) {
+          memcpy(output0, &freq, sizeof(int64));
+        }
+        if (get_versions) {
+          memcpy(output0, &version, sizeof(int64));
+        }
+      }
+    }
   }
 
-  void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count) override {
+  void LookupFreqAndVersion(K key, int64* output0, int64* output1, bool get_freqs, bool get_versions) override {
     ValuePtr<V>* value_ptr = nullptr;
     TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
-    V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
-    memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
+    if (output0) {
+      if (output1) {
+        int64 version = value_ptr->GetStep();
+        int64 freq = value_ptr->GetFreq();
+        memcpy(output1, &version, sizeof(int64));
+        memcpy(output0, &freq, sizeof(int64));
+      } else {
+        if (get_freqs) {
+          int64 freq = value_ptr->GetFreq();
+          memcpy(output0, &freq, sizeof(int64));
+        }
+        if (get_versions) {
+          int64 version = value_ptr->GetStep();
+          memcpy(output0, &version, sizeof(int64));
+        }
+      }
+    }  
   }
   
   Status LookupOrCreateKey(K key, ValuePtr<V>** val, bool* is_filter,

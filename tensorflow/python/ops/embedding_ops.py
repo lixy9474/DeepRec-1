@@ -100,7 +100,9 @@ def _embedding_lookup_and_transform(params,
                                     transform_fn=None,
                                     ev_init_value=None,
                                     blocknums=None,
-                                    counts=None):
+                                    counts=None,
+                                    get_freqs=False,
+                                    get_versions=False):
   """Helper function for embedding_lookup and _compute_sampled_logits.
 
   This function is a generalization of embedding_lookup that optionally
@@ -179,17 +181,24 @@ def _embedding_lookup_and_transform(params,
         return array_ops.scatter_nd(indices=indice_cnt, updates=embs_nozero, shape=[array_ops.shape(ids)[0], array_ops.shape(embs_nozero)[1]])
       else:
         with ops.colocate_with(params[0]):
-          result = _clip(array_ops.gather(params[0], ids, name=name,
-                                          ev_init_value=ev_init_value,
-                                          counts=counts),
-                         ids, max_norm)
+          result_tuple = _clip(array_ops.gather(params[0], ids, ev_init_value=ev_init_value, name=name, counts=counts,
+                       get_freqs=get_freqs, get_versions=get_versions),
+                       ids, max_norm)
+          if isinstance(result_tuple, list):
+            result = result_tuple[0]
+          else:
+            result = result_tuple
+
           if transform_fn:
             result = transform_fn(result)
-          return result
+        if isinstance(result_tuple, list):
+          result_tuple[0] = array_ops.identity(result)
+        else:
+          result_tuple = array_ops.identity(result)
+        return result_tuple
       # Make sure the final result does not have colocation contraints on the
       # params. Similar to the case np > 1 where parallel_dynamic_stitch is
       # outside the scioe of all with ops.colocate_with(params[p]).
-      return array_ops.identity(result)
     else:
       # Flatten the ids. There are two cases where we need to do this.
       # - There is more than one params tensor.
@@ -264,6 +273,8 @@ def _embedding_lookup_and_transform(params,
                                                  p_assignments, np)
       # Do np separate lookups, finding embeddings for plist[p] in params[p]
       partitioned_result = []
+      partitioned_result_1 = []
+      partitioned_result_2 = []
       for p in range(np):
         pids = gather_ids[p]
         if isinstance(params[p], kv_variable_ops.DynamicEmbeddingVariable):
@@ -288,7 +299,16 @@ def _embedding_lookup_and_transform(params,
               new_ev_init_value = None
             else:
               new_ev_init_value = gather_ev_init_value[p]
-            result = array_ops.gather(params[p], pids, ev_init_value=new_ev_init_value, counts=counts)
+            result_tuple = array_ops.gather(params[p], pids, ev_init_value=new_ev_init_value, 
+                                             counts=counts, get_freqs=get_freqs, get_versions=get_versions)
+            if isinstance(result_tuple, list):
+              result = result_tuple[0]
+              if len(result_tuple) > 1:
+                partitioned_result_1.append(result_tuple[1])
+              if len(result_tuple) > 2:
+                partitioned_result_2.append(result_tuple[2])
+            else:
+              result = result_tuple
             if transform_fn:
               # If transform_fn is provided, the clip_by_norm precedes
               # the transform and hence must be co-located. See below
@@ -340,7 +360,17 @@ def _embedding_lookup_and_transform(params,
       if not transform_fn:
         # If transform_fn was provided, the clip_by_norm was done above.
         ret = _clip(ret, ids, max_norm)
-      return ret
+      if isinstance(result_tuple, list):
+        result_tuple[0] = ret
+        if len(result_tuple) > 1:
+          result_tuple[1] = data_flow_ops.parallel_dynamic_stitch(
+            pindices, partitioned_result_1)
+        if len(result_tuple) > 2:
+         result_tuple[2] = data_flow_ops.parallel_dynamic_stitch(
+            pindices, partitioned_result_2)
+      else:
+        result_tuple = ret
+      return result_tuple
 
 
 @tf_export(v1=["nn.embedding_lookup"])
@@ -353,7 +383,9 @@ def embedding_lookup(
     max_norm=None,
     ev_init_value=None,
     blocknums=None,
-    counts=None):
+    counts=None,
+    get_freqs=False,
+    get_versions=False):
   """Looks up `ids` in a list of embedding tensors.
 
   This function is used to perform parallel lookups on the list of
@@ -416,7 +448,9 @@ def embedding_lookup(
       transform_fn=None,
       ev_init_value=ev_init_value,
       blocknums=blocknums,
-      counts=counts)
+      counts=counts,
+      get_freqs=get_freqs,
+      get_versions=get_versions)
 
 
 @tf_export("nn.embedding_lookup", v1=[])
@@ -485,7 +519,9 @@ def embedding_lookup_sparse(params,
                             name=None,
                             combiner=None,
                             max_norm=None,
-                            blocknums=None):
+                            blocknums=None,
+                            get_freqs=False,
+                            get_versions=False):
   """Computes embeddings for the given ids and weights.
 
   This op assumes that there is at least one id for each row in the dense tensor
@@ -590,11 +626,12 @@ def embedding_lookup_sparse(params,
       segment_ids = math_ops.cast(segment_ids, dtypes.int32)
 
     ids = sp_ids.values
-    if isinstance(params[0], kv_variable_ops.EmbeddingVariable) and params[0]._filter_freq == 0:
+    if isinstance(params[0], kv_variable_ops.EmbeddingVariable) and (params[0]._filter_freq != 0 or params[0]._record_freq):
+      ids, idx, counts = array_ops.unique_with_counts(ids)
+    else:
       ids, idx = array_ops.unique(ids)
       counts = None
-    else:
-      ids, idx, counts = array_ops.unique_with_counts(ids)
+
 
     uniqued_blocknums = None
     if blocknums is not None:
@@ -602,9 +639,14 @@ def embedding_lookup_sparse(params,
         raise ValueError("blocknums now require unqiue index to be generagted")
       else:
         uniqued_blocknums = math_ops.unsorted_segment_max(blocknums, idx, array_ops.squeeze(array_ops.shape(ids), 0))
-    embeddings = embedding_lookup(
+    embeddings_tuple = embedding_lookup(
         params, ids, partition_strategy=partition_strategy, max_norm=max_norm,
-        blocknums=uniqued_blocknums, counts = counts)
+        blocknums=uniqued_blocknums, counts = counts, get_freqs=get_freqs, get_versions=get_versions)
+    if isinstance(embeddings_tuple, list):
+      embeddings = embeddings_tuple[0]
+    else:
+      embeddings = embeddings_tuple
+    
     if embeddings.dtype in (dtypes.float16, dtypes.bfloat16):
       embeddings = math_ops.cast(embeddings, dtypes.float32)
     if not ignore_weights:
@@ -673,7 +715,15 @@ def embedding_lookup_sparse(params,
       else:
         assert False, "Unrecognized combiner"
 
-    return embeddings
+    if isinstance(embeddings_tuple, list):
+      embeddings_tuple[0] = embeddings
+      if len(embeddings_tuple) > 1:
+        embeddings_tuple[1] = [sp_ids.values, array_ops.gather(embeddings_tuple[1], idx)]
+      if len(embeddings_tuple) > 2:
+        embeddings_tuple[2] = [sp_ids.values, array_ops.gather(embeddings_tuple[2], idx)]
+    else:
+      embeddings_tuple = embeddings
+    return embeddings_tuple
 
 @tf_export(v1=["nn.adaptive_embedding_lookup_sparse"])
 def adaptive_embedding_lookup_sparse(hash_params,

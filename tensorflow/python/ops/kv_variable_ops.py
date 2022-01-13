@@ -280,7 +280,10 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     self._l2_weight_threshold = evconfig.l2_weight_threshold
     self._storage_type = evconfig.storage_type
     self._default_value_dim = evconfig.default_value_dim
-    if self._steps_to_live is 0 and self._filter_freq is 0 and self._l2_weight_threshold == -1.0:
+    self._record_freq = evconfig.record_freq
+    self._record_version = evconfig.record_version
+    if self._steps_to_live is 0 and self._filter_freq is 0 and self._l2_weight_threshold == -1.0 \
+      and self._record_freq is False and self._record_version is False:
       self._layout = "light"
     else:
       self._layout = "normal"
@@ -389,6 +392,8 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
                     layout = self._layout,
                     storage_type = self._storage_type,
                     default_value_dim = self._default_value_dim,
+                    record_freq = self._record_freq,
+                    record_version = self._record_version,
                     name=n))
         self._graph_element = self._handle
         self._cached_value = None
@@ -650,7 +655,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     """
     raise NotImplementedError("EmbeddingVariable does not implement read_value()")
 
-  def sparse_read(self, indices, name=None, ev_init_value=None, counts=None):
+  def sparse_read(self, indices, name=None, ev_init_value=None, counts=None, get_freqs=False, get_versions=False):
     """Reads the value of this variable sparsely, using `gather`."""
     with ops.name_scope("Gather" if name is None else name) as name:
       if self._trainable:
@@ -659,20 +664,39 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
         default_value = ev_init_value
         is_use_default_value_tensor = True
       else:
-        default_value = ops.convert_to_tensor(1.0)
+        default_value = ops.convert_to_tensor([1.0, 2.0])
         is_use_default_value_tensor = False
-      if counts != None:
-        value = gen_kv_variable_ops.kv_resource_gather_v1(self._handle,
-              indices,
-              default_value,
-              counts, name=name)
+      if get_freqs and get_versions:
+        if counts is None:
+          value, freqs, versions = gen_kv_variable_ops.kv_resource_gather_three_outputs(self._handle,
+                  indices,
+                  default_value, is_use_default_value_tensor, get_freqs=get_freqs, get_versions=get_versions, name=name)
+        else:
+          print("@@@@@", counts)
+          value, freqs, versions = gen_kv_variable_ops.kv_resource_gather_v1_three_outputs(self._handle,
+                  indices,
+                  default_value, counts, is_use_default_value_tensor, get_freqs=get_freqs, get_versions=get_versions, name=name)
+        return [array_ops.identity(value), freqs, versions]
+      elif get_freqs or get_versions:
+        if counts is None:
+          value, outs = gen_kv_variable_ops.kv_resource_gather_two_outputs(self._handle,
+                  indices,
+                  default_value, is_use_default_value_tensor, get_freqs=get_freqs, get_versions=get_versions, name=name)
+        else:
+          value, outs = gen_kv_variable_ops.kv_resource_gather_v1_two_outputs(self._handle,
+                  indices,
+                  default_value, counts, is_use_default_value_tensor, get_freqs=get_freqs, get_versions=get_versions, name=name)
+        return [array_ops.identity(value), outs]
       else:
-        value = gen_kv_variable_ops.kv_resource_gather(self._handle,
-              indices,
-              default_value,
-              is_use_default_value_tensor,
-              name=name)
-    return array_ops.identity(value)
+        if counts is None:
+          value = gen_kv_variable_ops.kv_resource_gather(self._handle,
+                indices,
+                default_value, is_use_default_value_tensor, get_freqs=get_freqs, get_versions=get_versions, name=name)
+        else:
+          value = gen_kv_variable_ops.kv_resource_gather_v1(self._handle,
+                indices,
+                default_value, counts, is_use_default_value_tensor, get_freqs=get_freqs, get_versions=get_versions, name=name)
+        return array_ops.identity(value)
 
   def to_proto(self, export_scope=None):
     """Converts a `EmbeddingVariable` to a `VariableDef` protocol buffer.
@@ -868,6 +892,44 @@ def _GatherGrad(op, grad):
   indices = array_ops.reshape(indices, size)
   return [ops.IndexedSlices(values, indices, params_shape), None, None]
 
+@ops.RegisterGradient("KvResourceGatherThreeOutputs")
+def _GatherThreeOutpusGrad(op, grad, grad1, grad2):
+  """Gradient for gather op."""
+  # Build appropriately shaped IndexedSlices
+  # Walk graph back until the original handle is found.
+  # TODO(apassos): more robust way of getting the shape.
+  # TODO(apassos): implement this for EAGER mode.
+  handle = op.inputs[0]
+  while handle.op.type != "KvVarHandleOp":
+    handle = handle.op.inputs[0]
+  params_shape = ops.convert_to_tensor(
+      tensor_shape.TensorShape(handle.op.get_attr("shape")))
+  indices = op.inputs[1]
+  size = array_ops.expand_dims(array_ops.size(indices), 0)
+  values_shape = array_ops.concat([size, params_shape[0:]], 0)
+  values = array_ops.reshape(grad, values_shape)
+  indices = array_ops.reshape(indices, size)
+  return [ops.IndexedSlices(values, indices, params_shape), None, None]
+
+@ops.RegisterGradient("KvResourceGatherTwoOutputs")
+def _GatherTwoOutpusGrad(op, grad, grad1):
+  """Gradient for gather op."""
+  # Build appropriately shaped IndexedSlices
+  # Walk graph back until the original handle is found.
+  # TODO(apassos): more robust way of getting the shape.
+  # TODO(apassos): implement this for EAGER mode.
+  handle = op.inputs[0]
+  while handle.op.type != "KvVarHandleOp":
+    handle = handle.op.inputs[0]
+  params_shape = ops.convert_to_tensor(
+      tensor_shape.TensorShape(handle.op.get_attr("shape")))
+  indices = op.inputs[1]
+  size = array_ops.expand_dims(array_ops.size(indices), 0)
+  values_shape = array_ops.concat([size, params_shape[0:]], 0)
+  values = array_ops.reshape(grad, values_shape)
+  indices = array_ops.reshape(indices, size)
+  return [ops.IndexedSlices(values, indices, params_shape), None, None]
+
 @ops.RegisterGradient("KvResourceGatherV1")
 def _GatherV1Grad(op, grad):
   """Gradient for gather op."""
@@ -886,4 +948,43 @@ def _GatherV1Grad(op, grad):
   values = array_ops.reshape(grad, values_shape)
   indices = array_ops.reshape(indices, size)
   return [ops.IndexedSlices(values, indices, params_shape), None, None, None]
+
+@ops.RegisterGradient("KvResourceGatherV1TwoOutputs")
+def _GatherV1TwoOutputsGrad(op, grad, grad1):
+  """Gradient for gather op."""
+  # Build appropriately shaped IndexedSlices
+  # Walk graph back until the original handle is found.
+  # TODO(apassos): more robust way of getting the shape.
+  # TODO(apassos): implement this for EAGER mode.
+  handle = op.inputs[0]
+  while handle.op.type != "KvVarHandleOp":
+    handle = handle.op.inputs[0]
+  params_shape = ops.convert_to_tensor(
+      tensor_shape.TensorShape(handle.op.get_attr("shape")))
+  indices = op.inputs[1]
+  size = array_ops.expand_dims(array_ops.size(indices), 0)
+  values_shape = array_ops.concat([size, params_shape[0:]], 0)
+  values = array_ops.reshape(grad, values_shape)
+  indices = array_ops.reshape(indices, size)
+  return [ops.IndexedSlices(values, indices, params_shape), None, None, None]
+
+@ops.RegisterGradient("KvResourceGatherV1ThreeOutputs")
+def _GatherV1ThreeOutputsGrad(op, grad, grad1, grad2):
+  """Gradient for gather op."""
+  # Build appropriately shaped IndexedSlices
+  # Walk graph back until the original handle is found.
+  # TODO(apassos): more robust way of getting the shape.
+  # TODO(apassos): implement this for EAGER mode.
+  handle = op.inputs[0]
+  while handle.op.type != "KvVarHandleOp":
+    handle = handle.op.inputs[0]
+  params_shape = ops.convert_to_tensor(
+      tensor_shape.TensorShape(handle.op.get_attr("shape")))
+  indices = op.inputs[1]
+  size = array_ops.expand_dims(array_ops.size(indices), 0)
+  values_shape = array_ops.concat([size, params_shape[0:]], 0)
+  values = array_ops.reshape(grad, values_shape)
+  indices = array_ops.reshape(indices, size)
+  return [ops.IndexedSlices(values, indices, params_shape), None, None, None]
+
 

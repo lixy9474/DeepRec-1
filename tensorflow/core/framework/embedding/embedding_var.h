@@ -154,10 +154,15 @@ class EmbeddingVar : public ResourceBase {
   Status LookupOrCreateKey(K key, ValuePtr<V>** value_ptr, int64 update_version = -1) {
     Status s = LookupOrCreateKeyInternal(key, value_ptr, emb_config_.total_num());
     TF_CHECK_OK(s);
-    if (emb_config_.is_primary() && emb_config_.steps_to_live != 0 && update_version != -1) {
+    if (emb_config_.is_primary() && (emb_config_.steps_to_live != 0 || emb_config_.record_version)
+         && update_version != -1) {
       (*value_ptr)->SetStep(update_version);
     }
     return s;
+  }
+
+  void LookupFreqAndVersion(K key, int64* output0, int64* output1, bool get_freqs, bool get_versions) {
+    filter_->LookupFreqAndVersion(key, output0, output1, get_freqs, get_versions);
   }
 
   int64 GetVersion(K key) {
@@ -170,14 +175,17 @@ class EmbeddingVar : public ResourceBase {
     return filter_->GetFreq(key);
   }
 
-  void LookupOrCreate(K key, V* val, V* default_v)  {
+  /*void LookupOrCreate(K key, V* val, V* default_v)  {
     const V* default_value_ptr = (default_v == nullptr) ? default_value_ : default_v;
     filter_->LookupOrCreate(key, val, default_value_ptr);
-  }
+  }*/
 
-  void LookupOrCreate(K key, V* val, V* default_v, int64 count)  {
+  void LookupOrCreate(K key, V* val, V* default_v, int64 count, bool get_freqs=false,
+                       bool get_versions=false, int64* output0=nullptr,
+                       int64* output1=nullptr, bool is_unique=false)  {
     const V* default_value_ptr = (default_v == nullptr) ? default_value_ : default_v;
-    filter_->LookupOrCreate(key, val, default_value_ptr, count);
+    filter_->LookupOrCreate(key, val, default_value_ptr, count, get_freqs,
+                             get_versions, output0, output1, is_unique);
   }
 
   V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, const V* default_v) {
