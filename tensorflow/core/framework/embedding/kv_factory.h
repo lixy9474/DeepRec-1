@@ -19,6 +19,7 @@ limitations under the License.
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/framework/embedding/dense_hash_map.h"
 #include "tensorflow/core/framework/embedding/lockless_hash_map.h"
+#include "tensorflow/core/framework/embedding/rocksdb_kv.h"
 
 namespace tensorflow {
 
@@ -30,13 +31,16 @@ class KVFactory {
  public:
   ~KVFactory() {}
   static KVInterface<K, V>* CreateKV(const std::string& kv_type,
-                                     int partition_num) {
+                                     int partition_num, std::string path) {
     if ("dense_hash_map" == kv_type) {
       VLOG(2) << "Use dense_hash_map as EV data struct";
       return new DenseHashMap<K, V>();
     } else if ("lockless_hash_map" == kv_type) {
       VLOG(2) << "Use lockless_hash_map as EV data struct";
       return new LocklessHashMap<K, V>();
+    } else if ("rocksdb_kv" == kv_type) {
+      VLOG(2) << "Use rocksdb_kv as EV data struct";
+      return new RocksDBKV<K, V>(path);
     } else {
       VLOG(2) << "Not match any hashtable_type, use default 'lockless_hash_map'";
       return new LocklessHashMap<K, V>();

@@ -163,6 +163,12 @@ class InitializeKvVariableOp : public OpKernel {
                     "steps_to_live must >= 0, ", std::to_string(steps_to_live_)));
     }
     OP_REQUIRES_OK(c, c->GetAttr("ht_type", &ht_type_));
+     if (embedding::StorageType::SSD == storage_type_) {
+      ht_type_ = "rocksdb_kv";
+      if (layout_ != "normal_fix") 
+        LOG(WARNING)<<"layout must be NORAML_FIX when storage type is SSD";
+      layout_ = "normal_fix";
+    }
     OP_REQUIRES_OK(c, c->GetAttr("ht_partition_num", &ht_partition_num_));
   }
 
@@ -185,17 +191,22 @@ class InitializeKvVariableOp : public OpKernel {
 
     if (handle_self.name() == handle_primary.name() &&
         handle_self.container() == handle_primary.container()) {
-
       OP_REQUIRES_OK(
         context,
         LookupOrCreateResource<EmbeddingVar<TKey, TValue>>(
             context, handle_self, &ev,
             [this, default_values, opname, slotnum,
              handle_self](EmbeddingVar<TKey, TValue>** ptr) {
+              int* slot_dims = new int[block_num_ * (slotnum + 1)]; 
+              int* slot_offset = new int[block_num_ * (slotnum + 1)];
+              for (int i = 0; i < block_num_ * (slotnum + 1); i++){
+                slot_dims[i] = 0;
+                slot_offset[i] = 0;
+              }
               auto ht = KVFactory<TKey, TValue>::CreateKV(
-                  ht_type_, ht_partition_num_);
+                  ht_type_, ht_partition_num_, storage_path_);
               *ptr = new EmbeddingVar<TKey, TValue>(handle_self.name(),
-                         ht,
+                         ht, slot_dims, slot_offset,
                          EmbeddingConfig(emb_index_ + block_num_ * slot_index_, emb_index_,
                                          block_num_, slotnum, opname + "-primary",
                                          steps_to_live_, filter_freq_, max_freq_,
@@ -213,10 +224,16 @@ class InitializeKvVariableOp : public OpKernel {
            [this, default_values, opname, slotnum,
             handle_primary](EmbeddingVar<TKey, TValue>** ptr) {
              int64 primary_slot_index(0), primary_emb_index(0);
+             int* slot_dims = new int[block_num_ * (slotnum + 1)]; 
+             int* slot_offset = new int[block_num_ * (slotnum + 1)];
+             for (int i = 0; i < block_num_ * (slotnum + 1); i++){
+               slot_dims[i] = 0;
+               slot_offset[i] = 0;
+             }
              auto ht = KVFactory<TKey, TValue>::CreateKV(
-                 ht_type_, ht_partition_num_);
+                 ht_type_, ht_partition_num_, storage_path_);
              *ptr = new EmbeddingVar<TKey, TValue>(handle_primary.name(),
-                        ht,
+                        ht, slot_dims, slot_offset,
                         EmbeddingConfig(primary_emb_index + block_num_ * primary_slot_index, primary_emb_index,
                                         block_num_, slotnum, opname + "-primary",
                                         steps_to_live_, filter_freq_, max_freq_,
@@ -233,7 +250,8 @@ class InitializeKvVariableOp : public OpKernel {
             [this, default_values, opname, primary_variable, slotnum,
              handle_self](EmbeddingVar<TKey, TValue>** ptr) {
               *ptr = new EmbeddingVar<TKey, TValue>(handle_self.name(),
-                         primary_variable->kv(),
+                         primary_variable->kv(), primary_variable->dims(),
+                         primary_variable->offset(),
                          EmbeddingConfig(emb_index_ + block_num_ * slot_index_, emb_index_,
                                          block_num_, slotnum, opname,
                                          steps_to_live_, 0,
@@ -642,9 +660,15 @@ class KvResourceImportV2Op: public OpKernel {
             [this, default_values, opname, slotnum,
              handle_self](EmbeddingVar<TKey, TValue>** ptr) {
               auto ht = KVFactory<TKey, TValue>::CreateKV(
-                  ht_type_, ht_partition_num_);
+                  ht_type_, ht_partition_num_, storage_path_);
+              int* slot_dims = new int[block_num_ * (slotnum + 1)]; 
+              int* slot_offset = new int[block_num_ * (slotnum + 1)];
+              for (int i = 0; i < block_num_ * (slotnum + 1); i++){
+                slot_dims[i] = 0;
+                slot_offset[i] = 0;
+              }
               *ptr = new EmbeddingVar<TKey, TValue>(handle_self.name(),
-                         ht,
+                         ht, slot_dims, slot_offset,
                          EmbeddingConfig(emb_index_ + block_num_ * slot_index_, emb_index_,
                                          block_num_, slotnum, opname + "-primary",
                                          steps_to_live_, filter_freq_,
@@ -663,9 +687,15 @@ class KvResourceImportV2Op: public OpKernel {
             handle_primary](EmbeddingVar<TKey, TValue>** ptr) {
              int64 primary_slot_index(0), primary_emb_index(0);
              auto ht = KVFactory<TKey, TValue>::CreateKV(
-                 ht_type_, ht_partition_num_);
+                 ht_type_, ht_partition_num_, storage_path_);
+             int* slot_dims = new int[block_num_ * (slotnum + 1)]; 
+             int* slot_offset = new int[block_num_ * (slotnum + 1)];
+             for (int i = 0; i < block_num_ * (slotnum + 1); i++){
+               slot_dims[i] = 0;
+               slot_offset[i] = 0;
+             }
              *ptr = new EmbeddingVar<TKey, TValue>(handle_primary.name(),
-                        ht,
+                        ht, slot_dims, slot_offset,
                         EmbeddingConfig(primary_emb_index + block_num_ * primary_slot_index, primary_emb_index,
                                         block_num_, slotnum, opname + "-primary",
                                         steps_to_live_, filter_freq_,
@@ -682,7 +712,8 @@ class KvResourceImportV2Op: public OpKernel {
             [this, default_values, opname, primary_variable, slotnum,
              handle_self](EmbeddingVar<TKey, TValue>** ptr) {
               *ptr = new EmbeddingVar<TKey, TValue>(handle_self.name(),
-                         primary_variable->kv(),
+                         primary_variable->kv(), primary_variable->dims(),
+                         primary_variable->offset(),
                          EmbeddingConfig(emb_index_ + block_num_ * slot_index_, emb_index_,
                                          block_num_, slotnum, opname,
                                          steps_to_live_, 0, max_freq_, l2_weight_threshold_,

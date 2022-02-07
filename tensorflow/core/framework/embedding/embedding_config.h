@@ -22,6 +22,8 @@ struct EmbeddingConfig {
   embedding::StorageType storage_type;
   std::string storage_path;
   int64 default_value_dim;
+  int ssd_flag;
+  int total_dims;
 
   EmbeddingConfig(int64 emb_index = 0, int64 primary_emb_index = 0,
                   int64 block_num = 1, int slot_num = 1,
@@ -44,11 +46,14 @@ struct EmbeddingConfig {
       counter_type(counter_type),
       storage_type(storage_type),
       storage_path(storage_path),
-      default_value_dim(default_value_dim) {
+      default_value_dim(default_value_dim),
+      ssd_flag(0) {
     if ("normal" == layout) {
       layout_type = LayoutType::NORMAL;
     } else if ("light" == layout) {
       layout_type = LayoutType::LIGHT;
+    } else if ("normal_fix" == layout){
+      layout_type = LayoutType::NORMAL_FIX;
     } else {
       LOG(WARNING) << "Unknown layout: " << layout << ", use LayoutType::NORMAL by default.";
       layout_type = LayoutType::NORMAL;
@@ -60,8 +65,12 @@ struct EmbeddingConfig {
       kHashFunc = 0;
       num_counter = 0;
     }
+
     if (embedding::LEVELDB == storage_type) {
       layout_type = LayoutType::LEVELDB;
+    }
+    if (embedding::StorageType::SSD == storage_type) {
+      ssd_flag = 1;
     }
   }
   
@@ -80,7 +89,7 @@ struct EmbeddingConfig {
   }
 
   int64 total_num() {
-    return block_num * (slot_num + 1);
+    return block_num * (slot_num + 1) * (1 + ssd_flag * (total_dims - 1));
   }
 
   int64 get_filter_freq() {

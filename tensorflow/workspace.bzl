@@ -1019,6 +1019,23 @@ def tf_repositories(path_prefix = "", tf_repo_name = ""):
         build_file = str(Label("//third_party:libcuckoo.BUILD")),
     )
 
+    #tf_http_archive(
+    #    name = "com_github_facebook_rocksdb",
+    #    sha256 = "4868cc95ab9b5dafd7c25f7ffb9fc1c70090fad688e339bfd9180ebb0734ea48",
+    #    strip_prefix = "rocksdb-5.7.3",
+    #    build_file = clean_dep("//third_party:rocksdb.BUILD"),
+    #    urls = [
+    #        "https://github.com/facebook/rocksdb/archive/refs/tags/v5.7.3.tar.gz",
+    #        "https://github.com/facebook/rocksdb/archive/refs/tags/v5.7.3.tar.gz"
+    #    ],
+    #)
+
+    native.new_local_repository(
+        name = "com_github_facebook_rocksdb",
+        path = "/root/code/rocksdb-5.7.3",
+        build_file = str(Label("//third_party:rocksdb.BUILD")),
+    )
+
     tf_http_archive(
         name = "com_github_google_leveldb",
         sha256 = "f99dc5dcb6f23e500b197db02e993ee0d3bafd1ac84b85ab50de9009b36fbf03",

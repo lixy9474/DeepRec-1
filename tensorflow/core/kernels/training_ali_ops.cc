@@ -132,10 +132,14 @@ class KvSparseApplyAdagradOp : public OpKernel {
 
               a += g.square();
               v -= g.constant(lr_scalar) * g * a.rsqrt();
-              var->Commit(value_ptr, v.data());
-              accum->Commit(value_ptr, a.data());
+              //var->Commit(value_ptr, v.data());
+              //accum->Commit(value_ptr, a.data());
+              std::vector<std::pair<T*, int64>> ptr_list;
+              ptr_list.emplace_back(std::pair<T*, int64>(v.data(), var->emb_index()));
+              ptr_list.emplace_back(std::pair<T*, int64>(a.data(), accum->emb_index()));
+              var->Commit(index, value_ptr, ptr_list);
             }
-          }
+          } 
         };
         const int64 cost = 1000; //very unreliable estimate for cost per step.
         auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
@@ -283,7 +287,7 @@ class KvSparseApplyFtrlOp : public OpKernel {
 
 // Use a macro to implement the computation here due to the templating of the
 // eigen tensor library.
-#define COMPUTE_FTRL(grad_to_use)                                              \
+#define COMPUTE_FTRL(index, grad_to_use)                                       \
   auto new_accum = accum + grad_to_use.square();                               \
   if (lr_power_scalar == static_cast<T>(-0.5)) {                               \
     linear +=                                                                  \
@@ -312,15 +316,17 @@ class KvSparseApplyFtrlOp : public OpKernel {
     var = var.constant(static_cast<T>(0));                                     \
   }                                                                            \
   accum += grad.square();                                                      \
-  var_->Commit(value_ptr, var.data());                                         \
-  accum_->Commit(value_ptr, accum.data());                                     \
-  linear_->Commit(value_ptr, linear.data());
+  std::vector<std::pair<T*, int64>> ptr_list;                                  \
+  ptr_list.emplace_back(std::pair<T*, int64>(var.data(), var_->emb_index()));   \
+  ptr_list.emplace_back(std::pair<T*, int64>(accum.data(), accum_->emb_index())); \
+  ptr_list.emplace_back(std::pair<T*, int64>(linear.data(), linear_->emb_index())); \
+  var_->Commit(index, value_ptr, ptr_list);
               if (has_l2_shrinkage) {
                 auto grad_with_shrinkage =
                     grad + static_cast<T>(2) * l2_shrinkage_scalar * var;
-                COMPUTE_FTRL(grad_with_shrinkage);
+                COMPUTE_FTRL(index, grad_with_shrinkage);
               } else {
-                COMPUTE_FTRL(grad);
+                COMPUTE_FTRL(index, grad);
               }
             }
           }
@@ -804,6 +810,7 @@ class KvSparseApplyAdagradDecayOp : public OpKernel {
             ValuePtr<T>* value_ptr = nullptr;
             bool is_filter = false;
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr, &is_filter, gs));
+            LOG(INFO)<<is_filter;
             if (is_filter) {
               auto a = accum->flat(value_ptr);
 
@@ -819,9 +826,14 @@ class KvSparseApplyAdagradDecayOp : public OpKernel {
               }
               a += g.square();
               v -= g.constant(lr_scalar) * g * a.rsqrt();
-              var->Commit(value_ptr, v.data());
-              accum->Commit(value_ptr, a.data());
-              accum_decay_power_var->Commit(value_ptr, accum_decay_power.data());
+              //var->Commit(value_ptr, v.data());
+              //accum->Commit(value_ptr, a.data());
+              //accum_decay_power_var->Commit(value_ptr, accum_decay_power.data());
+              std::vector<std::pair<T*, int64>> ptr_list;
+              ptr_list.emplace_back(std::pair<T*, int64>(v.data(), var->emb_index()));
+              ptr_list.emplace_back(std::pair<T*, int64>(a.data(), accum->emb_index()));
+              ptr_list.emplace_back(std::pair<T*, int64>(accum_decay_power.data(), accum_decay_power_var->emb_index()));
+              var->Commit(index, value_ptr, ptr_list);
             }
           }
         };
@@ -978,9 +990,11 @@ class KvSparseApplyAdamOp : public OpKernel {
               m_a += (g - m_a) * (static_cast<T>(1) - beta1_scalar);
               v_a += (g.square() - v_a) * (static_cast<T>(1) - beta2_scalar);
               var_i -= (m_a * alpha) / (v_a.sqrt() + epsilon_scalar);
-              var->Commit(value_ptr, var_i.data());
-              m->Commit(value_ptr, m_a.data());
-              v->Commit(value_ptr, v_a.data());
+              std::vector<std::pair<T*, int64>> ptr_list;
+              ptr_list.emplace_back(std::pair<T*, int64>(var_i.data(), var->emb_index()));
+              ptr_list.emplace_back(std::pair<T*, int64>(m_a.data(), m->emb_index()));
+              ptr_list.emplace_back(std::pair<T*, int64>(v_a.data(), v->emb_index()));
+              var->Commit(index, value_ptr, ptr_list);
             }
           }
         }
@@ -1536,11 +1550,16 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
                      (v_ + v_.constant(epsilon_scalar)).rsqrt() *
                          v_.constant(lr_scalar) * grad_;
 
-              v->Commit(value_ptr, v_.data());
+              //v->Commit(value_ptr, v_.data());
+              std::vector<std::pair<T*, int64>> ptr_list;
+              ptr_list.emplace_back(std::pair<T*, int64>(v_.data(), v->emb_index()));
               auto v = var->flat(value_ptr);
               v -= m_;
-              var->Commit(value_ptr, v.data());
-              m->Commit(value_ptr, m_.data());
+              //var->Commit(value_ptr, v.data());
+              //m->Commit(value_ptr, m_.data());
+              ptr_list.emplace_back(std::pair<T*, int64>(v.data(), var->emb_index()));
+              ptr_list.emplace_back(std::pair<T*, int64>(m_.data(), m->emb_index()));
+              var->Commit(index, value_ptr, ptr_list);
             }
           }
         };
@@ -1559,8 +1578,8 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
         const T alpha = lr_scalar *
             Eigen::numext::sqrt(static_cast<T>(1) - beta2_power_flat(0)) /
             (static_cast<T>(1) - beta1_power_flat(0));
-        beta1_ptr->Free(beta1_power_flat.data());
-        beta1_ptr->Free(beta2_power_flat.data());
+        //beta1_ptr->Free(beta1_power_flat.data());
+        //beta1_ptr->Free(beta2_power_flat.data());
 
         auto do_work = [this, ctx, inner_dim, &var, &m, &v, &grad, &indices,
              &lr_scalar, &beta1_scalar,
@@ -1590,16 +1609,23 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
                 m_a = m_a * beta1_scalar + g * (static_cast<T>(1) - beta1_scalar);
                 v_a = v_a * beta2_scalar + g.square() * (static_cast<T>(1) - beta2_scalar);
                 var_i -= (m_a * alpha) / (v_a.sqrt() + epsilon_scalar);
-                m->Commit(value_ptr, m_a.data());
-                v->Commit(value_ptr, v_a.data());
-                var->Commit(value_ptr, var_i.data());
+                //m->Commit(value_ptr, m_a.data());
+                //v->Commit(value_ptr, v_a.data());
+                //var->Commit(value_ptr, var_i.data());
+                std::vector<std::pair<T*, int64>> ptr_list;
+                ptr_list.emplace_back(std::pair<T*, int64>(var_i.data(), var->emb_index()));
+                ptr_list.emplace_back(std::pair<T*, int64>(m_a.data(), m->emb_index()));
+                ptr_list.emplace_back(std::pair<T*, int64>(v_a.data(), v->emb_index()));;
+                var->Commit(index, value_ptr, ptr_list);
               }
             }
           }
           beta1_power_flat(0) *= beta1_scalar;
           beta2_power_flat(0) *= beta2_scalar;
-          beta1_power->Commit(beta1_ptr, beta1_power_flat.data());
-          beta2_power->Commit(beta1_ptr, beta2_power_flat.data());
+          std::vector<std::pair<T*, int64>> ptr_list;
+          ptr_list.emplace_back(std::pair<T*, int64>(beta1_power_flat.data(), beta1_power->emb_index()));
+          ptr_list.emplace_back(std::pair<T*, int64>(beta2_power_flat.data(), beta2_power->emb_index()));
+          var->Commit(0, beta1_ptr, ptr_list);
         };
 
         const int64 cost = 1000;
@@ -1705,7 +1731,10 @@ class KvResourceSparseApplyGradientDescentOp : public OpKernel {
               auto g = grad_flat.template chip<0>(i);
               auto v = var->flat(value_ptr);
               v -= g.constant(lr_scalar) * g;
-              var->Commit(value_ptr, v.data());
+              //var->Commit(value_ptr, v.data());
+              std::vector<std::pair<T*, int64>> ptr_list;
+              ptr_list.emplace_back(std::pair<T*, int64>(v.data(), var->emb_index()));
+              var->Commit(index, value_ptr, ptr_list);
             }
           }
         };

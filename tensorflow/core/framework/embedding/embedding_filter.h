@@ -333,6 +333,7 @@ class CounterFilter : public EmbeddingFilter<K, V, EV> {
   Status LookupOrCreateKey(K key, ValuePtr<V>** val, bool* is_filter,
       int update_version = -1) override {
     Status s = ev_->LookupOrCreateKey(key, val, update_version);
+    LOG(INFO)<<key<<", "<<GetFreq(key, *val);
     *is_filter = GetFreq(key, *val) >= config_.filter_freq;
     return s;
   }

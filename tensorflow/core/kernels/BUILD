@@ -2842,6 +2842,7 @@ tf_kernel_library(
         "@sparsehash_c11//:dense_hash_map",
         "@libcuckoo//:libcuckoo",
         "@com_github_google_leveldb//:leveldb",
+        "@com_github_facebook_rocksdb//:rocksdb",
     ],
 )
 

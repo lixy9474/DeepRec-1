@@ -1422,11 +1422,12 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       for i in range(0, 6):
         for j in range(0, 3):
           self.assertEqual(emb1.tolist()[i][j], emb2.tolist()[i][j])
-
+  
   def testEmbeddingVariableForLEVELDB(self):
     print("testEmbeddingVariableForLEVELDB")
+    os.system("rm -rf /tmp/db_ut1")
     def runTestAdagrad(self, var, g):
-      emb = embedding_ops.embedding_lookup(var, math_ops.cast([0,1,2,5,6,7], dtypes.int64))
+      emb = embedding_ops.embedding_lookup(var, math_ops.cast([0, 1, 2, 5, 6, 7], dtypes.int64))
       fun = math_ops.multiply(emb, 2.0, name='multiply')
       loss = math_ops.reduce_sum(fun, name='reduce_sum')
       gs = training_util.get_or_create_global_step()
@@ -1443,6 +1444,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         r, _, _ = sess.run([emb, train_op,loss])
         r, _, _ = sess.run([emb, train_op,loss])
         r, _, _ = sess.run([emb, train_op,loss])
+        print(r)
         return r
 
     with ops.device('/cpu:0'), ops.Graph().as_default() as g:
@@ -1451,8 +1453,8 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
             initializer=init_ops.ones_initializer(dtypes.float32),
             partitioner=partitioned_variables.fixed_size_partitioner(num_shards=1),
             steps_to_live=5,
-            ev_option = variables.EmbeddingVariableOption(storage_option=variables.StorageOption(storage_type=config_pb2.StorageType.LEVELDB,
-                                                                                                 storage_path="1/2/3/")))
+            ev_option = variables.EmbeddingVariableOption(storage_option=variables.StorageOption(storage_type=config_pb2.StorageType.SSD,
+                                                                                                 storage_path="/tmp/db_ut1")))
       var = variable_scope.get_variable("var_2", shape=[100, 3], initializer=init_ops.ones_initializer(dtypes.float32))
       emb1 = runTestAdagrad(self, emb_var, g)
       emb2 = runTestAdagrad(self, var, g)
@@ -1460,7 +1462,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       for i in range(0, 6):
         for j in range(0, 3):
           self.assertEqual(emb1.tolist()[i][j], emb2.tolist()[i][j])
-
+  
 
 if __name__ == "__main__":
   googletest.main()

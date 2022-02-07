@@ -53,9 +53,13 @@ class EmbeddingVar : public ResourceBase {
  public:
   EmbeddingVar(const string& name,
                KVInterface<K, V>* kv,
+               int* slot_dims = nullptr,
+               int* slot_offset = nullptr,
                EmbeddingConfig emb_cfg = EmbeddingConfig()):
       name_(name),
       kv_(kv),
+      slot_dims_(slot_dims),
+      slot_offset_(slot_offset),
       default_value_(nullptr),
       value_len_(0),
       alloc_(nullptr),
@@ -74,6 +78,8 @@ class EmbeddingVar : public ResourceBase {
       new_value_ptr_fn = [] (size_t size) { return new LightValuePtr<V>(size); };
     } else if (LayoutType::NORMAL == emb_config_.get_layout_type()) {
       new_value_ptr_fn = [] (size_t size) { return new NormalValuePtr<V>(size); };
+    } else if (LayoutType::NORMAL_FIX == emb_config_.get_layout_type()){
+      new_value_ptr_fn = [] (size_t size) { return new NormalContinousValuePtr<V>(size); };
     } else {
       return errors::InvalidArgument(name_, ", Unsupport EmbeddingVariable LayoutType.");
     }
@@ -89,6 +95,13 @@ class EmbeddingVar : public ResourceBase {
       if (!alloc_) {
         return errors::InvalidArgument(name_, ", No registered PMEM AllocatorFactory.");
       }
+    } else if (embedding::StorageType::SSD == emb_config_.get_storage_type()) {
+      alloc_ = ev_allocator();
+      if (!alloc_) {
+        return errors::InvalidArgument(name_, ", No registered EV AllocatorFactory.");
+      }
+      new_value_ptr_fn = [this] (size_t size) { return new NormalContinousValuePtr<V>(size); };
+      kv_->SetNewValuePtrFunc(new_value_ptr_fn);
     } else {
       return errors::InvalidArgument(name_, ", Unsupport EmbeddingVariable StorageType.");
     }
@@ -100,6 +113,24 @@ class EmbeddingVar : public ResourceBase {
       default_value_ = TypedAllocator::Allocate<V>(alloc_, default_tensor.NumElements(), AllocationAttributes());
       auto default_tensor_flat = default_tensor.flat<V>();
       memcpy(default_value_, &default_tensor_flat(0), default_tensor.TotalBytes());
+      slot_dims_[emb_config_.emb_index] = value_len_;
+      int total_dims = 0;
+      int i; 
+      for (i = 0; i < emb_config_.block_num * (emb_config_.slot_num + 1); i++) {
+        total_dims += slot_dims_[i];
+        if (slot_dims_[i] == 0)
+          break;
+      }
+      if (i == emb_config_.block_num * (emb_config_.slot_num + 1)) {
+        emb_config_.total_dims = total_dims;
+        for (int i = 1; i < emb_config_.block_num * (emb_config_.slot_num + 1); i++) {
+          slot_offset_[i] += slot_dims_[i-1] + slot_offset_[i-1];
+        }
+        if (embedding::StorageType::SSD == emb_config_.get_storage_type()) {
+          LOG(INFO)<<"total_dims: "<<total_dims;
+          kv_->SetTotalDims(total_dims);
+        }
+      }
       return Status::OK();
     }
   }
@@ -131,6 +162,8 @@ class EmbeddingVar : public ResourceBase {
       }
       new_value_ptr_fn = [this] (size_t size) { return new DBValuePtr<V>(size, this->level_db_); };
      }
+    } else if (LayoutType::NORMAL_FIX == emb_config_.get_layout_type()){
+      new_value_ptr_fn = [] (size_t size) { return new NormalContinousValuePtr<V>(size); };
     } else {
       return errors::InvalidArgument(name_, ", Unsupport EmbeddingVariable LayoutType.");
     }
@@ -146,6 +179,13 @@ class EmbeddingVar : public ResourceBase {
       if (!alloc_) {
         return errors::InvalidArgument(name_, ", No registered PMEM AllocatorFactory.");
       }
+    } else if (embedding::StorageType::SSD == emb_config_.get_storage_type()) {
+      alloc_ = ev_allocator();
+      if (!alloc_) {
+        return errors::InvalidArgument(name_, ", No registered EV AllocatorFactory.");
+      }
+      new_value_ptr_fn = [this] (size_t size) { return new NormalContinousValuePtr<V>(size); };
+      kv_->SetNewValuePtrFunc(new_value_ptr_fn);
     } else if (embedding::StorageType::LEVELDB == emb_config_.get_storage_type()) {
       alloc_ = ev_allocator();
       if (!alloc_) {
@@ -163,6 +203,23 @@ class EmbeddingVar : public ResourceBase {
       default_value_ = TypedAllocator::Allocate<V>(alloc_, default_tensor.NumElements(), AllocationAttributes());
       auto default_tensor_flat = default_tensor.flat<V>();
       memcpy(default_value_, &default_tensor_flat(0), default_tensor.TotalBytes());
+      slot_dims_[emb_config_.emb_index] = value_len_;
+      int total_dims = 0;
+      int i; 
+      for (i = 0; i < emb_config_.block_num * (emb_config_.slot_num + 1); i++) {
+        total_dims += slot_dims_[i];
+        if (slot_dims_[i] == 0)
+          break;
+      }
+      if (i == emb_config_.block_num * (emb_config_.slot_num + 1)) {
+        emb_config_.total_dims = total_dims;
+        for (int i = 1; i < emb_config_.block_num * (emb_config_.slot_num + 1); i++) {
+          slot_offset_[i] += slot_dims_[i-1] + slot_offset_[i-1];
+        }
+        if (embedding::StorageType::SSD == emb_config_.get_storage_type()) {
+          kv_->SetTotalDims(total_dims);
+        }
+      }
       return Status::OK();
     }
   }
@@ -210,11 +267,12 @@ class EmbeddingVar : public ResourceBase {
 
   V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, const V* default_v) {
     return value_ptr->GetOrAllocate(alloc_, value_len_, default_v,
-        emb_config_.emb_index);
+        emb_config_.emb_index, slot_dims_[emb_config_.emb_index],
+        slot_offset_[emb_config_.emb_index]);
   }
 
   V* LookupPrimaryEmb(ValuePtr<V>* value_ptr) {
-    V* primary_val = value_ptr->GetValue(emb_config_.primary_emb_index, value_len_);
+    V* primary_val = value_ptr->GetValue(emb_config_.primary_emb_index, value_len_, slot_offset_[emb_config_.primary_emb_index]);
     return primary_val;
   }
 
@@ -224,8 +282,9 @@ class EmbeddingVar : public ResourceBase {
     return typename TTypes<V>::Flat(val, dims);
   }
 
-  void Commit(ValuePtr<V>* value_ptr, const V* v) {
-    value_ptr->Commit(value_len_, v, emb_config_.emb_index);
+  void Commit(const K id, ValuePtr<V>* value_ptr, std::vector<std::pair<V*, int64>> ptr_list) {
+    value_ptr->CopyToPtr(ptr_list, slot_dims_, slot_offset_, emb_config_.total_num());
+    kv_->Commit(id, value_ptr);
   }
 
   int64 ValueLen() const {
@@ -297,8 +356,8 @@ class EmbeddingVar : public ResourceBase {
     std::vector<K> key_list_tmp;
     kv_->GetSnapshot(&key_list_tmp, &value_ptr_list);
     for (int64 i = 0; i < key_list_tmp.size(); ++i) {
-      V* val = value_ptr_list[i]->GetValue(emb_config_.emb_index, value_len_);
-      V* primary_val = value_ptr_list[i]->GetValue(emb_config_.primary_emb_index, value_len_);
+      V* val = value_ptr_list[i]->GetValue(emb_config_.emb_index, value_len_, slot_offset_[emb_config_.emb_index]);
+      V* primary_val = value_ptr_list[i]->GetValue(emb_config_.primary_emb_index, value_len_, slot_offset_[emb_config_.primary_emb_index]);
       if (val != nullptr && primary_val != nullptr) {
         value_list->push_back(val);
         key_list->push_back(key_list_tmp[i]);
@@ -312,10 +371,13 @@ class EmbeddingVar : public ResourceBase {
         }
       }
     }
+    kv_->DestoryValuePtr(value_ptr_list);
     return key_list->size();
   }
 
   Status Destroy(int64 value_len) {
+    if (embedding::StorageType::SSD == emb_config_.get_storage_type())
+     return Status::OK();
     std::vector<K> key_list;
     std::vector<ValuePtr<V>* > value_ptr_list;
     kv_->GetSnapshot(&key_list, &value_ptr_list);
@@ -332,6 +394,18 @@ class EmbeddingVar : public ResourceBase {
 
   KVInterface<K, V>* kv() {
     return kv_;
+  }
+
+  int* dims() {
+    return slot_dims_;
+  }
+
+  int* offset() {
+    return slot_offset_;
+  }
+
+  int64 emb_index(){
+    return emb_config_.emb_index;
   }
 
   Status Shrink() {
@@ -372,14 +446,16 @@ class EmbeddingVar : public ResourceBase {
           value_ptr_list[i]->SetStep(gs);
         } else {
           if (gs - version > emb_config_.steps_to_live) {
-            to_deleted.emplace_back(std::pair<K, ValuePtr<V>*>(key_list[i], value_ptr_list[i]));
+            to_deleted.emplace_back(std::pair<K, ValuePtr<V>*>(key_list[i], value_ptr_list[i]));           
           }
         }
+        V* val;
+        value_ptr_list[i]->Free(val);
       }
       for (const auto it : to_deleted) {
         // TODO memory recycle
-        (it.second)->Destroy(alloc_, value_len_);
-        delete it.second;
+        //(it.second)->Destroy(alloc_, value_len_);
+        //delete it.second;
         kv_->Remove(it.first);
       }
     }
@@ -396,6 +472,10 @@ class EmbeddingVar : public ResourceBase {
 
   void SetSlotNum(int64 slot_num) {
     emb_config_.slot_num = slot_num;
+  }
+
+  void AllocateValuePtr() {
+    kv_->AllocateValuePtr(emb_config_.total_num(), new_value_ptr_fn);
   }
 
  private:
@@ -423,6 +503,10 @@ class EmbeddingVar : public ResourceBase {
  private:
   std::string name_;
   KVInterface<K, V>* kv_;
+  int* slot_dims_;
+  int* slot_offset_;
+  //std::vector<KVInterface<K,V>*> kv_list_;
+  //int num_kvs_;
   bool is_initialized_ = false;
   std::function<ValuePtr<V>*(size_t)> new_value_ptr_fn;
 

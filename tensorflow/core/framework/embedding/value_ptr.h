@@ -16,6 +16,7 @@ enum class LayoutType {
   LIGHT,
   NORMAL,
   LEVELDB,
+  NORMAL_FIX
 };
 
 namespace {
@@ -138,6 +139,53 @@ struct NormalHeader {
         freq_counter, freq_counter + count);
   }
 };
+
+struct FixLengthHeader {
+/*_______________________________________________________________________
+  |                        |               |                embeddings             |
+  | slotflag + global step | freq counter  |                    V                  |
+  |                        |               |             actually value            |
+  |           int64        |     int64     |               by alloctor             |
+  |         (8 bytes)      |   (8 bytes)   |     (4 * slot_num * emb_dim bytes)    |
+  -----------------------------------------------------------------------
+*/
+  int64 global_step;
+  int64 freq_counter;
+
+  FixLengthHeader() {
+    memset(this, 0, sizeof(FixLengthHeader));
+  }
+
+   inline int64 GetGlobalStep() {
+    return global_step & 0x0000ffffffffffff;
+  }
+
+  inline void SetGlobalStep(int64 gs) {
+    int64 temp = global_step;
+    temp &= 0xffff000000000000;
+    temp |= gs;
+    global_step = temp;
+  }
+
+  inline int64 GetFreqCounter() {
+    return freq_counter;
+  }
+
+  inline void SetFreqCounter(int64 fc) {
+    freq_counter = fc;
+  }
+
+  inline void AddFreq() {
+    __sync_bool_compare_and_swap(&freq_counter,
+        freq_counter, freq_counter + 1);
+  }
+
+  inline void AddFreq(int64 count) {
+    __sync_bool_compare_and_swap(&freq_counter,
+        freq_counter, freq_counter + count);
+  }
+};
+
 } // namespace
 
 template <class V>
@@ -145,7 +193,7 @@ class ValuePtr {
  public:
   ~ValuePtr() {}
 
-  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index) {
+  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int dim, int offset) {
     MetaHeader* meta = (MetaHeader*)ptr_;
     unsigned int embnum = (unsigned int)meta->embed_num;
     auto metadata = meta->GetColumnBitset();
@@ -173,7 +221,7 @@ class ValuePtr {
   }
 
   // simple getter for V* and version
-  virtual V* GetValue(int emb_index, int64 value_len) {
+  virtual V* GetValue(int emb_index, int64 value_len, int offset) {
     MetaHeader* meta = (MetaHeader*)ptr_;
     auto metadata = meta->GetColumnBitset();
     if (metadata.test(emb_index)) {
@@ -185,7 +233,13 @@ class ValuePtr {
 
   virtual void Commit(int64 value_len, const V* v, int emb_index) {}
 
+  virtual void CopyToPtr(std::vector<std::pair<V*, int64>> ptr_list, int* slot_dims, int* slot_offset, int total_dims) {}
+
   virtual void Free(const V* v) {}
+
+  virtual void* GetPtr() const {
+    return this->ptr_;
+  }
 
   virtual void Destroy(Allocator* allocator, int64 value_len) {
     MetaHeader* meta = (MetaHeader*)ptr_;
@@ -291,6 +345,106 @@ class NormalValuePtr : public ValuePtr<V> {
 };
 
 template <class V>
+class NormalContinousValuePtr : public ValuePtr<V>{
+  public:
+   NormalContinousValuePtr(size_t size) {
+    this->ptr_ = (void*)malloc(sizeof(FixLengthHeader) + sizeof(V) * size);
+    memset(this->ptr_ + sizeof(FixLengthHeader), 0, sizeof(V) * size);
+    new ((char*)this->ptr_) FixLengthHeader();
+    //int8* meta = (int8*)((char*)this->ptr_ + 6);
+    //*meta |= 1;
+    //LOG(INFO) << (int)(*meta);
+   }
+  
+   ~NormalContinousValuePtr(){
+    //free(this->ptr_);
+   }
+
+  V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int dim, int offset) override {
+    int8 meta = *((int8*)((char*)this->ptr_ + 6));
+    bool flag = (meta >> emb_index) & 1;
+    std::bitset<8> bs(meta);
+    //LOG(INFO)<< emb_index<<", "<< bs.test(emb_index);
+    if (!bs.test(emb_index)) {
+      while(this->flag_.test_and_set(std::memory_order_acquire));
+      if (bs.test(emb_index)) {
+        return ((V*)this->ptr_ + sizeof(int64) * 2 / sizeof(V) + offset);
+      }
+      int64 alloc_value_len = value_len;
+      V* tensor_val = (V*)malloc(value_len * sizeof(V));
+      memcpy(tensor_val, default_v, sizeof(V) * value_len);
+
+      int8* m = (int8*)((char*)this->ptr_ + 6);
+      *m |= (1 <<  emb_index);      
+      // NOTE:if we use ((unsigned long*)((char*)ptr_ + 1))[0] = metadata.to_ulong();
+      // the ptr_ will be occaionally  modified from 0x7f18700912a0 to 0x700912a0
+      // must use  ((V**)ptr_ + 1 + 1)[emb_index] = tensor_val;  to avoid
+      this->flag_.clear(std::memory_order_release);
+      return tensor_val;
+    } else {
+      V* tensor_val = (V*)malloc(value_len * sizeof(V));
+      V* val = ((V*)this->ptr_ + sizeof(int64) * 2 / sizeof(V) + offset);
+      memcpy(tensor_val, val, value_len * sizeof(V));
+      return tensor_val;
+    }
+  }
+
+  virtual V* GetValue(int emb_index, int64 value_len, int offset) {
+    int meta = *((int64*)this->ptr_) >> 48;
+    std::bitset<16> bs(meta);
+    if (bs.test(emb_index)) {
+      return ((V*)this->ptr_ + sizeof(int64) * 2 / sizeof(V) + offset);
+    } else {
+      return nullptr;
+    }
+  }
+
+  virtual int GetHeadersize() {
+    return sizeof(FixLengthHeader);
+  }
+  
+  void CopyToPtr(std::vector<std::pair<V*, int64>> ptr_list, int* slot_dims, int* slot_offset, int total_dims) override {
+    for (auto it : ptr_list) {
+      V* val = it.first;
+      int64 index = it.second;
+      //LOG(INFO)<<"slot num id: "<<index<<", dims: "<<slot_dims[index]<<", offset: "<<slot_offset[index];
+      V* st = (V*)this->ptr_ + sizeof(FixLengthHeader) / sizeof(V) + slot_offset[index];
+      memcpy(st, val, slot_dims[index] * sizeof(V));
+    }
+  }
+
+  virtual void Free(const V* v) {
+    //free(this->ptr_);
+    //LOG(INFO)<<this->ptr_;
+    delete this;
+  }
+  
+  int64 GetStep() {
+    return ((FixLengthHeader*)this->ptr_)->GetGlobalStep();
+  }
+
+  void SetStep(int64 gs) {
+    ((FixLengthHeader*)this->ptr_)->SetGlobalStep(gs);
+  }
+
+  int64 GetFreq() {
+    return ((FixLengthHeader*)this->ptr_)->GetFreqCounter();
+  }
+
+  void SetFreq(int64 freq) {
+    ((FixLengthHeader*)this->ptr_)->SetFreqCounter(freq);
+  }
+
+  void AddFreq() {
+    ((FixLengthHeader*)this->ptr_)->AddFreq();
+  }
+
+  void AddFreq(int64 count) {
+    ((FixLengthHeader*)this->ptr_)->AddFreq(count);
+  }
+};
+
+template <class V>
 class DBValuePtr : public NormalValuePtr<V> {
  public:
   DBValuePtr(size_t size, leveldb::DB* level_db) : NormalValuePtr<V>(size),
@@ -300,7 +454,7 @@ class DBValuePtr : public NormalValuePtr<V> {
   ~DBValuePtr() {
   }
 
-  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index) {
+  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int dims, int offset) {
     MetaHeader* meta = (MetaHeader*)this->ptr_;
     unsigned int embnum = (unsigned int)meta->embed_num;
     auto metadata = meta->GetColumnBitset();
@@ -378,7 +532,7 @@ class DBValuePtr : public NormalValuePtr<V> {
     free((void*)v);
   }
 
-  virtual V* GetValue(int emb_index, int64 value_len) {
+  virtual V* GetValue(int emb_index, int64 value_len, int offset) {
     MetaHeader* meta = (MetaHeader*)this->ptr_;
     auto metadata = meta->GetColumnBitset();
     if (metadata.test(emb_index)) {

@@ -72,6 +72,10 @@ class DenseHashMap : public KVInterface<K, V> {
     }
   }
 
+  Status Commit(K key, const ValuePtr<V>* value_ptr) {
+    return Status::OK();
+  }
+
   // Other Method
   int64 Size() const {
     int64 ret = 0;

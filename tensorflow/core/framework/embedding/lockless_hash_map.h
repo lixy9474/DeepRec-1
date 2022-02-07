@@ -61,10 +61,15 @@ class LocklessHashMap : public KVInterface<K, V> {
     }
   } 
 
+  Status Commit(K key, const ValuePtr<V>* value_ptr) {
+    return Status::OK();
+  }
+
   // Other Method
   int64 Size() const {
     return hash_map_.size_lockless();
   }
+  
 
   // Remove KV
   Status Remove(K key) {
