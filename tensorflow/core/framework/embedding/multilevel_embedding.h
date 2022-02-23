@@ -6,6 +6,7 @@
 #include "tensorflow/core/framework/embedding/dense_hash_map.h"
 #include "tensorflow/core/framework/embedding/leveldb_kv.h"
 #include "tensorflow/core/framework/embedding/lockless_hash_map.h"
+#include "tensorflow/core/framework/embedding/lockless_hash_map_cpu.h"
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -109,6 +110,13 @@ class StorageManager {
         VLOG(1) << "StorageManager::DRAM_LEVELDB: " << name_;
         kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
         kvs_.push_back(std::make_pair(new LevelDBKV<K, V>(sc_.path), ev_allocator()));
+        break;
+      case StorageType::HBM_DRAM:
+        //new_value_ptr_fn_ = [] (size_t size) { return new NormalGPUValuePtr<V>(size); };
+        new_value_ptr_fn_2 = [] (Allocator* allocator, size_t size) { return new NormalGPUValuePtr<V>(allocator, size); };
+        LOG(INFO) << "StorageManager::HBM_DRAM: " << name_;
+        kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), alloc_));
+        kvs_.push_back(std::make_pair(new LocklessHashMapCPU<K, V>(), alloc_));
         break;
       default:
         VLOG(1) << "StorageManager::default" << name_;
@@ -218,7 +226,12 @@ class StorageManager {
       }
     }
     if (!found) {
-      *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
+      if(sc_.type == StorageType::HBM_DRAM){
+        *value_ptr = new_value_ptr_fn_2(alloc_, size);//TODO
+      }
+      else{
+        *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
+      }
     }
     if (level || !found) {
       Status s = kvs_[0].first->Insert(key, *value_ptr);
@@ -393,6 +406,8 @@ class StorageManager {
 
   mutex* get_mutex() { return &mu_; }
 
+
+
  private:
   void BatchEviction() {
     Env* env = Env::Default();
@@ -421,6 +436,8 @@ class StorageManager {
         k_size = std::min(k_size, kSize);
         size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
         ValuePtr<V>* value_ptr;
+        std::vector<K> keys;
+        std::vector<ValuePtr<V>*> value_ptrs;
         for (int64 i = 0; i < true_size; ++i) {
           if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
             TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
@@ -435,12 +452,14 @@ class StorageManager {
       }
     }
   }
-
+ public:
+  Allocator* alloc_;
  private:
   int32 hash_table_count_;
   std::string name_;
   std::vector<std::pair<KVInterface<K, V>*, Allocator*>> kvs_;
   std::function<ValuePtr<V>*(Allocator*, size_t)> new_value_ptr_fn_;
+  std::function<ValuePtr<V>*(Allocator*, size_t)> new_value_ptr_fn_2;
   StorageConfig sc_;
   bool is_multi_level_;
 

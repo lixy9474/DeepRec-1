@@ -3,6 +3,7 @@
 
 //#include "tensorflow/core/framework/embedding/embedding_var.h"
 #include "tensorflow/core/framework/embedding/embedding_config.h"
+#include "tensorflow/core/framework/embedding/batch.h"
 
 namespace tensorflow {
 namespace embedding{
@@ -32,6 +33,8 @@ class EmbeddingFilter {
  public:
   virtual void LookupOrCreate(K key, V* val, const V* default_value_ptr) = 0;
   virtual void LookupOrCreateWithFreq(K key, V* val, const V* default_value_ptr) = 0;
+  virtual void LookupOrCreateWithFreqGPU(K key, V* val, const V* default_value_ptr) = 0;
+  virtual  void LookupOrCreateWithFreqGPUBatch(K* keys, V* val_base, V** default_values,int64 size, int64 slice_elems, int64 value_len) = 0;
   virtual void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count) = 0;
   virtual Status LookupOrCreateKey(K key, ValuePtr<V>** val, bool* is_filter,
       int update_version = -1) = 0;
@@ -109,6 +112,28 @@ class BloomFilter : public EmbeddingFilter<K, V, EV> {
         memcpy(val, default_value_ptr, sizeof(V) * ev_->ValueLen());
     }
     AddFreq(key);
+  }
+
+  void LookupOrCreateWithFreqGPU(K key, V* val, const V* default_value_ptr) override {
+    ValuePtr<V>* value_ptr = nullptr;
+    if (GetBloomFreq(key) >= config_.filter_freq) {
+      TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
+      V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
+      cudaMemcpy(val, mem_val, sizeof(V) * ev_->ValueLen(), cudaMemcpyDeviceToDevice);
+      value_ptr->Free(mem_val);
+    } else {
+      int64 default_value_dim = ev_->GetDefaultValueDim();
+      V* default_value = ev_->GetDefaultValuePtr();
+      if (default_value == default_value_ptr)
+        cudaMemcpy(val, default_value_ptr + (key % default_value_dim) * ev_->ValueLen(), sizeof(V) * ev_->ValueLen(), cudaMemcpyDeviceToDevice);
+      else
+        cudaMemcpy(val, default_value_ptr, sizeof(V) * ev_->ValueLen(), cudaMemcpyDeviceToDevice);
+    }
+    AddFreq(key);
+  }
+
+  void LookupOrCreateWithFreqGPUBatch(K* keys, V* val_base, V** default_values,int64 size, int64 slice_elems, int64 value_len)  {
+
   }
 
   void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count) override {
@@ -422,6 +447,28 @@ class CounterFilter : public EmbeddingFilter<K, V, EV> {
     value_ptr->AddFreq();
   }
 
+  void LookupOrCreateWithFreqGPU(K key, V* val, const V* default_value_ptr) override {
+    ValuePtr<V>* value_ptr = nullptr;
+    TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
+    if (GetFreq(key, value_ptr) >= config_.filter_freq) {
+      V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
+      cudaMemcpy(val, mem_val, sizeof(V) * ev_->ValueLen(), cudaMemcpyDeviceToDevice);
+      value_ptr->Free(mem_val);
+    } else {
+      int64 default_value_dim= ev_->GetDefaultValueDim();
+      V* default_value = ev_->GetDefaultValuePtr();
+      if (default_value == default_value_ptr)
+        cudaMemcpy(val, default_value_ptr + (key % default_value_dim) * ev_->ValueLen(), sizeof(V) * ev_->ValueLen(), cudaMemcpyDeviceToDevice);
+      else
+        cudaMemcpy(val, default_value_ptr, sizeof(V) * ev_->ValueLen(), cudaMemcpyDeviceToDevice);
+    }
+    value_ptr->AddFreq();
+  }
+
+  void LookupOrCreateWithFreqGPUBatch(K* keys, V* val_base, V** default_values,int64 size, int64 slice_elems, int64 value_len)  {
+    
+  }
+
   void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count) override {
     ValuePtr<V>* value_ptr = nullptr;
     TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
@@ -525,6 +572,77 @@ class NullableFilter : public EmbeddingFilter<K, V, EV> {
     memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
     value_ptr->AddFreq();
     value_ptr->Free(mem_val);
+  }
+
+  void LookupOrCreateWithFreqGPU(K key, V* val, const V* default_value_ptr) override {
+    ValuePtr<V>* value_ptr = nullptr;
+    TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
+    V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
+    cudaMemcpy(val, mem_val, sizeof(V) * ev_->ValueLen(),cudaMemcpyDeviceToDevice);
+    //In fact,now val* is on memory,this code copies data from device to host to check.
+    value_ptr->AddFreq();
+    //value_ptr->Free(mem_val);
+  }
+
+  void LookupOrCreateWithFreqGPUBatch(K* keys, V* val_base, V** default_values, int64 size, int64 slice_elems, int64 value_len)  {
+    std::vector<V*> mem_vals;
+    std::vector<V*> init_mem_vals;
+    std::vector<V*> init_default_values;
+    ValuePtr<V>* value_ptr = nullptr;
+    for(int i = 0; i < size; i++){
+      TF_CHECK_OK(ev_->LookupOrCreateKey(keys[i], &value_ptr));
+      int need_initialize = 0;
+      V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_values[i], need_initialize);
+      if(need_initialize){
+        init_mem_vals.push_back(mem_val);
+        init_default_values.push_back(default_values[i]);
+      }
+      mem_vals.push_back(mem_val);
+      value_ptr->AddFreq();
+    }
+
+    int init_size = init_mem_vals.size();
+    V** dev_value_address, **dev_init_value_address, **dev_init_default_address;
+    int block_dim = 128;
+    
+    /*
+    if(init_size != 0){
+      cudaMalloc(&dev_init_value_address, init_size * sizeof(V *));
+      cudaMalloc(&dev_init_default_address, init_size * sizeof(V *));
+
+      cudaMemcpy(dev_init_value_address, init_mem_vals.data(), sizeof(V *) * init_size, cudaMemcpyHostToDevice);
+      cudaMemcpy(dev_init_default_address, init_default_values.data(), sizeof(V *) * init_size, cudaMemcpyHostToDevice);
+
+      void* args[] = { (void*)&dev_init_value_address, (void*)&dev_init_default_address, (void*)&value_len, (void*)&init_size};
+      cudaLaunchKernel((void *)BatchInit<V>, (init_size + block_dim - 1) / block_dim, block_dim, args, 0, NULL);
+      cudaDeviceSynchronize();
+
+      cudaFree(dev_init_value_address);
+      cudaFree(dev_init_default_address);
+    }//Initialize using kernel function
+    */
+    
+    /*
+    for(int i = 0; i < init_size; i++){
+      cudaMemcpy(init_mem_vals[i], init_default_values[i], value_len * sizeof(V), cudaMemcpyDeviceToDevice);
+    }//Initialize using cuda DtoD
+    */
+
+    cudaMalloc(&dev_value_address, size * sizeof(V *));
+    cudaMemcpy(dev_value_address, mem_vals.data(), sizeof(V *) * size, cudaMemcpyHostToDevice);
+
+    void* args1[] = { (void*)&dev_value_address, (void*)&val_base, (void*)&slice_elems, (void*)&size};
+    cudaLaunchKernel((void *)BatchCopy<V>, (size + block_dim - 1) / block_dim, block_dim, args1, 0, NULL);
+    cudaDeviceSynchronize();
+
+    /*
+    for(int i = 0; i < size; i++){
+      cudaMemcpy(val_base + i * slice_elems, mem_vals[i], sizeof(V) * ev_->ValueLen(),cudaMemcpyDeviceToDevice);
+    }//Copy data to mem_val using cuda DtoD
+    */
+
+    cudaFree(dev_value_address);
+    
   }
 
   void LookupOrCreate(K key, V* val, const V* default_value_ptr, int64 count) override {

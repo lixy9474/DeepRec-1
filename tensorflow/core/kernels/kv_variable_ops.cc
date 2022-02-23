@@ -56,6 +56,16 @@ REGISTER_KV_VAR_HANDLE(int32, float)
 REGISTER_KV_VAR_HANDLE(int64, float)
 #undef REGISTER_KV_VAR_HANDLE
 
+#define REGISTER_KV_VAR_HANDLE(ktype, vtype)                           \
+  REGISTER_KERNEL_BUILDER(Name("KvVarHandleOp")                        \
+                          .Device(DEVICE_GPU)                          \
+                          .TypeConstraint<ktype>("Tkeys")              \
+                          .TypeConstraint<vtype>("dtype"),             \
+                          ResourceHandleOp<EmbeddingVar<ktype, vtype>>);
+REGISTER_KV_VAR_HANDLE(int32, float)
+REGISTER_KV_VAR_HANDLE(int64, float)
+#undef REGISTER_KV_VAR_HANDLE
+
 template <typename T, typename TKey, typename TValue>
 class KvVariableShapeOp : public OpKernel {
  public:
@@ -87,6 +97,20 @@ REGISTER_KV_VARIABLE_SHAPE(int64, int32, float)
 REGISTER_KV_VARIABLE_SHAPE(int64, int64, float)
 #undef REGISTER_KV_VARIABLE_SHAPE
 
+/*
+#define REGISTER_KV_VARIABLE_SHAPE(type, ktype, vtype)                \
+  REGISTER_KERNEL_BUILDER(                                            \
+      Name("KvVariableShape").Device(DEVICE_GPU)                      \
+                             .TypeConstraint<type>("out_type")        \
+                             .TypeConstraint<ktype>("Tkeys"),         \
+                             KvVariableShapeOp<type, ktype, vtype>);
+REGISTER_KV_VARIABLE_SHAPE(int32, int32, float)
+REGISTER_KV_VARIABLE_SHAPE(int32, int64, float)
+REGISTER_KV_VARIABLE_SHAPE(int64, int32, float)
+REGISTER_KV_VARIABLE_SHAPE(int64, int64, float)
+#undef REGISTER_KV_VARIABLE_SHAPE
+*/
+
 class DestroyKvResourceOp : public OpKernel {
  public:
   explicit DestroyKvResourceOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -109,6 +133,10 @@ class DestroyKvResourceOp : public OpKernel {
 
 REGISTER_KERNEL_BUILDER(Name("DestroyKvResourceOp").Device(DEVICE_CPU),
                         DestroyKvResourceOp);
+/*                        
+REGISTER_KERNEL_BUILDER(Name("DestroyKvResourceOp").Device(DEVICE_GPU),
+                        DestroyKvResourceOp);
+*/
 
 template <typename TKey, typename TValue>
 class InitializeKvVariableOp : public OpKernel {
@@ -199,7 +227,7 @@ class InitializeKvVariableOp : public OpKernel {
         LookupOrCreateResource<EmbeddingVar<TKey, TValue>>(
             context, handle_self, &ev,
             [this, default_values, opname,
-             handle_self](EmbeddingVar<TKey, TValue>** ptr) {
+             handle_self, context](EmbeddingVar<TKey, TValue>** ptr) {
               auto storage_manager = new embedding::StorageManager<TKey, TValue>(
                   handle_self.name(), embedding::StorageConfig(storage_type_,
                                                                storage_path_,
@@ -213,7 +241,8 @@ class InitializeKvVariableOp : public OpKernel {
                                          steps_to_live_, filter_freq_, max_freq_,
                                          l2_weight_threshold_, layout_,
                                          max_element_size_, false_positive_probability_,
-                                         counter_type_, default_value_dim_));
+                                         counter_type_, default_value_dim_),
+                                         context->device()->GetAllocator({}));
             return Status::OK();
             }));
       ev->Init(default_values, default_value_dim_);
@@ -224,7 +253,7 @@ class InitializeKvVariableOp : public OpKernel {
        LookupOrCreateResource<EmbeddingVar<TKey, TValue>>(
            context, handle_primary, &primary_variable,
            [this, default_values, opname,
-            handle_primary](EmbeddingVar<TKey, TValue>** ptr) {
+            handle_primary, context](EmbeddingVar<TKey, TValue>** ptr) {
              int64 primary_slot_index(0), primary_emb_index(0);
              auto storage_manager = new embedding::StorageManager<TKey, TValue>(
                  handle_primary.name(), embedding::StorageConfig(storage_type_,
@@ -239,7 +268,8 @@ class InitializeKvVariableOp : public OpKernel {
                                         steps_to_live_, filter_freq_, max_freq_,
                                         l2_weight_threshold_, layout_,
                                         max_element_size_, false_positive_probability_,
-                                        counter_type_));
+                                        counter_type_),
+                                        context->device()->GetAllocator({}));
             // default_values is slot value, should not to initialize primary value
             return Status::OK();
            }));
@@ -249,7 +279,7 @@ class InitializeKvVariableOp : public OpKernel {
         LookupOrCreateResource<EmbeddingVar<TKey, TValue>>(
             context, handle_self, &ev,
             [this, default_values, opname, primary_variable,
-             handle_self](EmbeddingVar<TKey, TValue>** ptr) {
+             handle_self, context](EmbeddingVar<TKey, TValue>** ptr) {
               *ptr = new EmbeddingVar<TKey, TValue>(handle_self.name(),
                          primary_variable->storage_manager(),
                          EmbeddingConfig(emb_index_ + block_num_ * slot_index_, emb_index_,
@@ -257,7 +287,8 @@ class InitializeKvVariableOp : public OpKernel {
                                          steps_to_live_, filter_freq_,
                                          max_freq_, l2_weight_threshold_,
                                          layout_, max_element_size_, false_positive_probability_,
-                                         counter_type_, default_value_dim_));
+                                         counter_type_, default_value_dim_),
+                                         context->device()->GetAllocator({}));
              return (*ptr)->Init(default_values, default_value_dim_);
             }));
       core::ScopedUnref unref_me(primary_variable);
@@ -307,6 +338,26 @@ TF_CALL_double(REGISTER_CPU_KERNELS);
 #undef REGISTER_CPU_KERNELS
 #undef REGISTER_KERNELS
 
+#define REGISTER_KERNELS(ktype, vtype)                               \
+  REGISTER_KERNEL_BUILDER(Name("InitializeKvVariableOp")             \
+                              .Device(DEVICE_GPU)                    \
+                              .HostMemory("resource_self")           \
+                              .HostMemory("resource_primary")        \
+                              .HostMemory("value")                   \
+                              .HostMemory("empty_key")               \
+                              .TypeConstraint<ktype>("Tkeys")        \
+                              .TypeConstraint<vtype>("dtype"),       \
+                          InitializeKvVariableOp<ktype, vtype>);
+
+#define REGISTER_GPU_KERNELS(T)        \
+  REGISTER_KERNELS(int32, T);     \
+  REGISTER_KERNELS(int64, T);
+
+TF_CALL_float(REGISTER_GPU_KERNELS);
+TF_CALL_double(REGISTER_GPU_KERNELS);
+#undef REGISTER_GPU_KERNELS
+#undef REGISTER_KERNELS
+
 template <typename TKey, typename TValue>
 class KvResourceIsInitializedOp : public OpKernel {
  public:
@@ -336,6 +387,15 @@ REGISTER_KERNELS(int32, float)
 REGISTER_KERNELS(int64, float)
 #undef REGISTER_KERNELS
 
+#define REGISTER_KERNELS(ktype, vtype)                             \
+  REGISTER_KERNEL_BUILDER(Name("KvVarIsInitializedOp")             \
+                          .TypeConstraint<ktype>("Tkeys")          \
+                          .Device(DEVICE_GPU),                     \
+                          KvResourceIsInitializedOp<ktype, vtype>);
+REGISTER_KERNELS(int32, float)
+REGISTER_KERNELS(int64, float)
+#undef REGISTER_KERNELS
+
 template <typename TKey, typename TValue>
 class KvResourceGatherOp : public OpKernel {
  public:
@@ -358,7 +418,12 @@ class KvResourceGatherOp : public OpKernel {
     OP_REQUIRES_OK(c, c->allocate_output(0, result_shape, &out));
 
     std::function<void(TKey, TValue*, TValue*)> lookup_or_create_fn;
-    if (ev->IsMultiLevel()) {
+    std::function<void(TKey*, TValue*, TValue**, int64, int64)> lookup_or_create_fn_batch;
+    if(ev->IsHBMDRAM()){
+      lookup_or_create_fn_batch = [ev] (TKey* indexs, TValue* out_base, TValue** default_vs, int64 size, int64 slice_elems){
+                                  ev->LookupOrCreateWithFreqGPUBatch(indexs, out_base, default_vs, size, slice_elems);};
+    }
+    else if (ev->IsMultiLevel()) {
       lookup_or_create_fn = [ev] (TKey index, TValue* out, TValue* default_v){
                                   ev->LookupOrCreateWithFreq(index, out, default_v);};
     } else {
@@ -396,31 +461,59 @@ class KvResourceGatherOp : public OpKernel {
         Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
             slice_bytes, do_work);
       } else {
-        auto do_work = [this, indices_flat,
-             out_base, slice_elems, c, ev, lookup_or_create_fn] (int64 start, int64 limit) {
-          std::vector<TKey> ids;
-          for (int64 i = start; i < limit; ++i) {
-            TValue* default_v;
-            default_v = ev->GetDefaultValuePtr() +
-                          ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
-            /*ev->LookupOrCreate(indices_flat(i),
-                out_base + i * slice_elems, default_v);*/
-            lookup_or_create_fn(indices_flat(i),
-                out_base + i * slice_elems, default_v);
-            ids.push_back(indices_flat(i));
-          }
-
-          ev->storage_manager()->Schedule([ev, ids]() {
-            embedding::BatchCache<TKey>* cache = ev->Cache();
-            if (cache) {
-              cache->add_to_rank(ids.data(), ids.size());
+        if(ev->IsHBMDRAM()){
+          auto do_work = [this, indices_flat,
+              out_base, slice_elems, c, ev, lookup_or_create_fn_batch] (int64 start, int64 limit) {
+            std::vector<TKey> ids;
+            std::vector<TValue*> default_values;
+            for (int64 i = start; i < limit; ++i) {
+              TValue* default_v;
+              default_v = ev->GetDefaultValuePtr() +
+                            ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
+              default_values.push_back(default_v);
+              ids.push_back(indices_flat(i));
             }
-          });
-        };
+            lookup_or_create_fn_batch(ids.data(),
+                  out_base + start * slice_elems, default_values.data(), limit - start, slice_elems);
+            ev->storage_manager()->Schedule([ev, ids]() {
+              embedding::BatchCache<TKey>* cache = ev->Cache();
+              if (cache) {
+                cache->add_to_rank(ids.data(), ids.size());
+              }
+            });
+          };
 
-        auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
-        Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
-            slice_bytes, do_work);
+          auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
+          Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
+              slice_bytes, do_work);
+        }
+        else{
+          auto do_work = [this, indices_flat,
+              out_base, slice_elems, c, ev, lookup_or_create_fn] (int64 start, int64 limit) {
+            std::vector<TKey> ids;
+            for (int64 i = start; i < limit; ++i) {
+              TValue* default_v;
+              default_v = ev->GetDefaultValuePtr() +
+                            ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
+              /*ev->LookupOrCreate(indices_flat(i),
+                  out_base + i * slice_elems, default_v);*/
+              lookup_or_create_fn(indices_flat(i),
+                  out_base + i * slice_elems, default_v);
+              ids.push_back(indices_flat(i));
+            }
+
+            ev->storage_manager()->Schedule([ev, ids]() {
+              embedding::BatchCache<TKey>* cache = ev->Cache();
+              if (cache) {
+                cache->add_to_rank(ids.data(), ids.size());
+              }
+            });
+          };
+
+          auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
+          Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
+              slice_bytes, do_work);
+          }//ev->isHBMDRAM();
       }
     }
   }
@@ -455,6 +548,24 @@ TF_CALL_double(REGISTER_GATHER_CPU);
 #undef REGISTER_GATHER_ALL_INDICES
 #undef REGISTER_GATHER_FULL
 
+#define REGISTER_GATHER_FULL(dev, ktype, vtype)                   \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceGather")                \
+                              .Device(DEVICE_GPU)                 \
+                              .HostMemory("resource")             \
+                              .HostMemory("indices")              \
+                              .HostMemory("default_value")        \
+                              .TypeConstraint<vtype>("dtype")     \
+                              .TypeConstraint<ktype>("Tkeys"),    \
+                          KvResourceGatherOp<ktype, vtype>)
+#define REGISTER_GATHER_ALL_INDICES(dev, type) \
+  REGISTER_GATHER_FULL(dev, int32, type);      \
+  REGISTER_GATHER_FULL(dev, int64, type)
+#define REGISTER_GATHER_GPU(type) REGISTER_GATHER_ALL_INDICES(GPU, type)
+TF_CALL_float(REGISTER_GATHER_GPU);
+TF_CALL_double(REGISTER_GATHER_GPU);
+#undef REGISTER_GATHER_GPU
+#undef REGISTER_GATHER_ALL_INDICES
+#undef REGISTER_GATHER_FULL
 
 template <typename TKey, typename TValue>
 class KvResourceGatherV1Op : public OpKernel {

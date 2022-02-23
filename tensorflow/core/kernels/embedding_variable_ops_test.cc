@@ -28,6 +28,7 @@
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/util/tensor_slice_reader_cache.h"
 
+#include <time.h>
 #include <sys/resource.h>
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/kernels/kv_variable_ops.h"
@@ -1075,6 +1076,131 @@ TEST(EmbeddingVariableTest, TestSizeDBKV) {
   ASSERT_EQ(hashmap->Size(), 98);
   LOG(INFO) << "2 size:" << hashmap->Size();
 }
+
+void t1_gpu(KVInterface<int64, float>* hashmap) {
+  for (int i = 0; i< 100; ++i) {
+    hashmap->Insert(i, new NormalGPUValuePtr<float>(ev_allocator(), 100));
+  }
+}
+
+TEST(EmbeddingVariableTest,TestRemoveLocklessCPU) {
+    KVInterface<int64, float>* hashmap = new LocklessHashMapCPU<int64, float>();
+    ASSERT_EQ(hashmap->Size(), 0);
+    LOG(INFO) << "hashmap size: " << hashmap->Size();
+    auto t = std::thread(t1, hashmap);
+    t.join();
+    LOG(INFO) << "hashmap size: " << hashmap->Size();
+    ASSERT_EQ(hashmap->Size(), 100);
+    TF_CHECK_OK(hashmap->Remove(1));
+    TF_CHECK_OK(hashmap->Remove(2));
+    ASSERT_EQ(hashmap->Size(), 98);
+    LOG(INFO) << "2 size:" << hashmap->Size();
+}
+
+void CommitGPU(KVInterface<int64, float>* hashmap) {
+  for (int64 i = 0; i< 100; ++i) {
+    ValuePtr<float>* tmp= new NormalGPUValuePtr<float>(ev_allocator(), 100);
+    hashmap->Commit(i, tmp);
+  }
+}
+
+TEST(EmbeddingVariableTest, TestCommitHashMapCPU) {
+  KVInterface<int64, float>* hashmap = new LocklessHashMapCPU<int64, float>();
+  hashmap->SetTotalDims(100);
+  ASSERT_EQ(hashmap->Size(), 0);
+  LOG(INFO) << "hashmap size: " << hashmap->Size();
+  auto t = std::thread(CommitGPU, hashmap);
+  t.join();
+  LOG(INFO) << "hashmap size: " << hashmap->Size();
+  ASSERT_EQ(hashmap->Size(), 100);
+  TF_CHECK_OK(hashmap->Remove(1));
+  TF_CHECK_OK(hashmap->Remove(2));
+  ASSERT_EQ(hashmap->Size(), 98);
+  LOG(INFO) << "2 size:" << hashmap->Size();
+}
+
+TEST(EmbeddingVariableTest, TestGPUValuePtr) {
+  int ev_list_size = 32;
+  ValuePtr<float>* ptr_ = new NormalGPUValuePtr<float>(ev_allocator(), ev_list_size);
+  float* address = *(float **)((char *)ptr_->GetPtr() + sizeof(FixedLengthHeader));
+  float host_data[ev_list_size];
+  float initial_data[ev_list_size];
+  for(int i = 0;i < ev_list_size;++i){
+    initial_data[i] = 10;
+  }
+  for(int i = 0;i < ev_list_size;++i){
+    LOG(INFO) << i << " " << initial_data[i];
+  }
+  cudaMemcpy(address, initial_data, ev_list_size * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(host_data, address, ev_list_size * sizeof(float), cudaMemcpyDeviceToHost);
+  for(int i = 0;i < ev_list_size;++i){
+    LOG(INFO) << i << " " << host_data[i];
+  }
+}//Forbidden, due to no gpu allocator at that time
+
+TEST(EmbeddingVariableTest, TestCommitValue) {
+  int ev_list_size = 32;
+  ValuePtr<float>* ptr_ = new NormalGPUValuePtr<float>(ev_allocator(),ev_list_size);
+  float* address = *(float **)((char *)ptr_->GetPtr() + sizeof(FixedLengthHeader));
+  float initial_data[ev_list_size];
+  for(int i = 0;i < ev_list_size;++i){
+    initial_data[i] = 10;
+  }
+  cudaMemcpy(address, initial_data, ev_list_size * sizeof(float), cudaMemcpyHostToDevice);
+  KVInterface<int64, float>* hashmap = new LocklessHashMapCPU<int64, float>();
+  hashmap->SetTotalDims(ev_list_size);
+  hashmap->Commit(1, ptr_);
+  ValuePtr<float>* check;
+  hashmap->Lookup(1,&check);
+  LOG(INFO) << "hashmap size: " << hashmap->Size();
+  float* tmp = (float *)((char *)check->GetPtr() + sizeof(FixedLengthHeader)); 
+
+  for(int i = 0;i < ev_list_size;++i){
+    LOG(INFO) << i << " " << tmp[i];
+    //ASSERT_EQ(tmp[i], 10);
+  }//
+}
+/*
+TEST(EmbeddingVariableTest, TestBatchCommitofLocklessHashMapCPU) {
+  KVInterface<int64, float>* hashmap = new LocklessHashMapCPU<int64, float>();
+  const int EmbeddingSize = 16;
+  const int BatchSize = 16;
+
+  hashmap->SetTotalDims(EmbeddingSize);
+  std::vector<ValuePtr<float>*> value_ptr_list;
+  std::vector<int64> key_list;
+
+  for(int64 i = 0; i < BatchSize; i++) {
+    key_list.emplace_back(i);
+    ValuePtr<float>* ptr_ = new NormalGPUValuePtr<float>(EmbeddingSize);
+    float* address = *(float **)((char *)ptr_->GetPtr() + sizeof(FixedLengthHeader));
+    float initial_data[EmbeddingSize];
+    for(int j = 0;j < EmbeddingSize;++j){
+      initial_data[j] = i;
+      //LOG(INFO) << "initial[" << i << "][" << j << "]=" << initial_data[j];
+    }
+    cudaMemcpy(address, initial_data, EmbeddingSize * sizeof(float), cudaMemcpyHostToDevice);
+    value_ptr_list.emplace_back(ptr_);
+  }//initialize V on GPU 
+  
+  timespec start,end;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  hashmap->BatchCommit(key_list, value_ptr_list);
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  std::cout << "time: " << ((double)(end.tv_sec - start.tv_sec)*1000000000 + end.tv_nsec - start.tv_nsec)/1000000 << "ms" << std::endl;
+
+  for(int64 i = 0; i < BatchSize; i++) {
+    ValuePtr<float>* check;
+    hashmap->Lookup(i,&check);
+    float* tmp = (float *)((char *)check->GetPtr() + sizeof(FixedLengthHeader)); 
+    for(int j = 0;j < EmbeddingSize;++j){
+      LOG(INFO) << "batch[" << i << "][" << j << "]=" << tmp[j];
+      //ASSERT_EQ(tmp[j], i);
+    }
+  }//compare value after BatchCommit
+}
+*/
+
 
 } // namespace
 } // namespace embedding

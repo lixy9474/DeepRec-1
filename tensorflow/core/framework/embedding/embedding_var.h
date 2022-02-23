@@ -55,31 +55,45 @@ class EmbeddingVar : public ResourceBase {
  public:
   EmbeddingVar(const string& name,
                embedding::StorageManager<K, V>* storage_manager,
-               EmbeddingConfig emb_cfg = EmbeddingConfig()):
+               EmbeddingConfig emb_cfg = EmbeddingConfig(),
+               Allocator* alloc = nullptr):
       name_(name),
       storage_manager_(storage_manager),
       default_value_(nullptr),
       value_len_(0),
-      alloc_(nullptr),
+      alloc_(alloc),
       emb_config_(emb_cfg) {}
 
   Status Init(const Tensor& default_tensor, int64 default_value_dim) {
     filter_ = FilterFactory::CreateFilter<K, V, EmbeddingVar<K, V>>(emb_config_, this, storage_manager_);
 
     // for default value allocation
-    alloc_ = ev_allocator();
+    // alloc_ = ev_allocator();
 
     if (storage_manager_ == nullptr) {
       return errors::InvalidArgument("Invalid ht_type to construct EmbeddingVar");
     } else {
-      emb_config_.default_value_dim = default_value_dim;
-      value_len_ = default_tensor.NumElements()/emb_config_.default_value_dim;
-      default_value_ = TypedAllocator::Allocate<V>(alloc_, default_tensor.NumElements(), AllocationAttributes());
-      auto default_tensor_flat = default_tensor.flat<V>();
-      memcpy(default_value_, &default_tensor_flat(0), default_tensor.TotalBytes());
+      if(embedding::StorageType::HBM_DRAM == storage_manager_->GetStorageType()){
+        emb_config_.default_value_dim = default_value_dim;
+        value_len_ = default_tensor.NumElements() / emb_config_.default_value_dim;
+
+        storage_manager_->alloc_ = alloc_;
+
+        cudaMalloc(&default_value_, default_tensor.NumElements() * sizeof(V));
+        auto default_tensor_flat = default_tensor.flat<V>();
+        cudaMemcpy(default_value_, &default_tensor_flat(0), default_tensor.TotalBytes(), cudaMemcpyHostToDevice);
+      }else{
+        alloc_ = ev_allocator();
+        emb_config_.default_value_dim = default_value_dim;
+        value_len_ = default_tensor.NumElements()/emb_config_.default_value_dim;
+        default_value_ = TypedAllocator::Allocate<V>(alloc_, default_tensor.NumElements(), AllocationAttributes());
+        auto default_tensor_flat = default_tensor.flat<V>();
+        memcpy(default_value_, &default_tensor_flat(0), default_tensor.TotalBytes());
+      }
       if (LayoutType::NORMAL_CONTIGUOUS == storage_manager_->GetLayoutType()) {
         storage_manager_->SetAllocLen(value_len_, emb_config_.slot_num + 1);
       }
+
       return Status::OK();
     }
   }
@@ -130,6 +144,18 @@ class EmbeddingVar : public ResourceBase {
     filter_->LookupOrCreateWithFreq(key, val, default_value_ptr);
   }
 
+  void LookupOrCreateWithFreqGPU(K key, V* val, V* default_v)  {
+    const V* default_value_ptr = (default_v == nullptr) ? default_value_ : default_v;
+    filter_->LookupOrCreateWithFreqGPU(key, val, default_value_ptr);
+  }
+
+  void LookupOrCreateWithFreqGPUBatch(K* keys, V* val_base, V** default_values, int64 size, int64 slice_elems)  {
+    for(int i = 0;i < size;i++){
+      default_values[i] = (default_values[i] == nullptr) ? default_value_ : default_values[i];
+    }
+    filter_->LookupOrCreateWithFreqGPUBatch(keys, val_base, default_values, size, slice_elems, value_len_);
+  }
+
   void LookupOrCreate(K key, V* val, V* default_v, int64 count)  {
     const V* default_value_ptr = (default_v == nullptr) ? default_value_ : default_v;
     filter_->LookupOrCreate(key, val, default_value_ptr, count);
@@ -138,6 +164,11 @@ class EmbeddingVar : public ResourceBase {
   V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, const V* default_v) {
     return value_ptr->GetOrAllocate(alloc_, value_len_, default_v,
         emb_config_.emb_index, storage_manager_->GetOffset(emb_config_.emb_index));
+  }
+
+  V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, const V* default_v,int &need_initialize) {
+    return value_ptr->GetOrAllocate(alloc_, value_len_, default_v,
+        emb_config_.emb_index, storage_manager_->GetOffset(emb_config_.emb_index), need_initialize);
   }
 
   V* LookupPrimaryEmb(ValuePtr<V>* value_ptr) {
@@ -178,6 +209,10 @@ class EmbeddingVar : public ResourceBase {
 
   bool IsMultiLevel() {
     return storage_manager_->IsMultiLevel();
+  }
+
+  bool IsHBMDRAM(){
+    return  embedding::StorageType::HBM_DRAM == storage_manager_->GetStorageType();
   }
 
   std::string DebugString() const {
@@ -269,7 +304,11 @@ class EmbeddingVar : public ResourceBase {
       Destroy();
       delete storage_manager_;
     }
-    TypedAllocator::Deallocate(alloc_, default_value_, value_len_);
+    if(embedding::StorageType::HBM_DRAM == storage_manager_->GetStorageType()){
+        cudaFree(default_value_);
+      }else{
+        TypedAllocator::Deallocate(alloc_, default_value_, value_len_);
+      }
   }
   TF_DISALLOW_COPY_AND_ASSIGN(EmbeddingVar);
 };

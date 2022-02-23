@@ -7,6 +7,9 @@
 #include <memory>
 
 #include "tensorflow/core/framework/typed_allocator.h"
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+
 
 namespace tensorflow {
 
@@ -220,6 +223,10 @@ class ValuePtr {
     }
   }
 
+  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int offset, int &need_initialize) {
+
+  }
+
   // simple getter for V* and version
   virtual V* GetValue(int emb_index, int offset) {
     MetaHeader* meta = (MetaHeader*)ptr_;
@@ -408,6 +415,105 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
   void AddFreq(int64 count) {
     ((FixedLengthHeader*)this->ptr_)->AddFreq(count);
   }
+};
+
+template <class V>
+class NormalGPUValuePtr : public ValuePtr<V> {
+ public:
+  NormalGPUValuePtr(Allocator* allocator, size_t size) {
+    this->ptr_ = (void*) malloc(sizeof(FixedLengthHeader) + sizeof(V *));
+    //V* tensor_val;
+    //cudaMalloc(&tensor_val, sizeof(V) * size);
+    //*(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) = tensor_val;
+    alloc_ = allocator;
+    v_size = size;
+    *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) = TypedAllocator::Allocate<V>(allocator, size, AllocationAttributes());
+    new ((char*)this->ptr_) FixedLengthHeader();
+  }
+
+  ~NormalGPUValuePtr() {
+    TypedAllocator::Deallocate(alloc_, *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)), v_size);
+    free(this->ptr_);
+  }
+  
+  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int offset) override {
+    int8 meta = *((int8*)((char*)this->ptr_ + 6));
+    std::bitset<8> bs(meta);
+    if (!bs.test(emb_index)) {
+      while(this->flag_.test_and_set(std::memory_order_acquire));
+      if (bs.test(emb_index))
+        return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+      V* tensor_val = *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+      cudaMemcpy(tensor_val, default_v, value_len * sizeof(V), cudaMemcpyDeviceToDevice);
+      int8* m = (int8*)((char*)this->ptr_ + 6);
+      *m |= (1 <<  emb_index);
+      this->flag_.clear(std::memory_order_release);
+      return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+    } else {
+      return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+    }
+  }
+
+  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int offset, int &need_initialize) override {
+    int8 meta = *((int8*)((char*)this->ptr_ + 6));
+    std::bitset<8> bs(meta);
+    if (!bs.test(emb_index)) {
+      while(this->flag_.test_and_set(std::memory_order_acquire));
+      if (bs.test(emb_index))
+        return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+      V* tensor_val = *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+      cudaMemcpy(tensor_val, default_v, value_len * sizeof(V), cudaMemcpyDeviceToDevice);
+      need_initialize = 1;
+      int8* m = (int8*)((char*)this->ptr_ + 6);
+      *m |= (1 <<  emb_index);
+      this->flag_.clear(std::memory_order_release);
+      return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+    } else {
+      return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+    }
+  }
+
+  // simple getter for V* and version
+  virtual V* GetValue(int emb_index, int64 value_len, int offset) {
+    int8 meta = *((int8*)((char*)this->ptr_ + 6));
+    std::bitset<8> bs(meta);
+    if (bs.test(emb_index)) {
+      return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+    } else {
+      return nullptr;
+    }
+  }
+
+  virtual void Destroy(Allocator* allocator, int64 value_len) {
+    return;
+  }
+
+  int64 GetStep() {
+    return ((FixedLengthHeader*)this->ptr_)->GetGlobalStep();
+  }
+
+  void SetStep(int64 gs) {
+    ((FixedLengthHeader*)this->ptr_)->SetGlobalStep(gs);
+  }
+
+  int64 GetFreq() {
+    return ((FixedLengthHeader*)this->ptr_)->GetFreqCounter();
+  }
+
+  void SetFreq(int64 freq) {
+    ((FixedLengthHeader*)this->ptr_)->SetFreqCounter(freq);
+  }
+
+  void AddFreq() {
+    ((FixedLengthHeader*)this->ptr_)->AddFreq();
+  }
+
+  void AddFreq(int64 count) {
+    ((FixedLengthHeader*)this->ptr_)->AddFreq(count);
+  }
+  public:
+    Allocator *alloc_;
+    int v_size;
 };
 
 }  // namespace tensorflow
