@@ -5,6 +5,7 @@
 #include "tensorflow/core/framework/embedding/config.pb.h"
 #include "tensorflow/core/framework/embedding/dense_hash_map.h"
 #include "tensorflow/core/framework/embedding/leveldb_kv.h"
+#include "tensorflow/core/framework/embedding/ssd_kv.h"
 #include "tensorflow/core/framework/embedding/lockless_hash_map.h"
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/lib/core/threadpool.h"
@@ -109,6 +110,15 @@ class StorageManager {
         VLOG(1) << "StorageManager::DRAM_LEVELDB: " << name_;
         kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
         kvs_.push_back(std::make_pair(new LevelDBKV<K, V>(sc_.path), ev_allocator()));
+        break;
+      case StorageType::SSD:
+        VLOG(1) << "StorageManager::SSD: " << name_;
+        kvs_.push_back(std::make_pair(new SSDKV<K, V>(sc_.path), ev_allocator()));
+        break;
+      case StorageType::DRAM_SSD:
+        VLOG(1) << "StorageManager::DRAM_SSD: " << name_;
+        kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
+        kvs_.push_back(std::make_pair(new SSDKV<K, V>(sc_.path), ev_allocator()));
         break;
       default:
         VLOG(1) << "StorageManager::default" << name_;

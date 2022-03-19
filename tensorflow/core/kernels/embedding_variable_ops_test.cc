@@ -1076,6 +1076,139 @@ TEST(EmbeddingVariableTest, TestSizeDBKV) {
   LOG(INFO) << "2 size:" << hashmap->Size();
 }
 
+class DataLoader
+{
+public:
+    std::vector<int64> ids;
+    size_t offset;
+
+
+    DataLoader(std::string filepath, size_t feature_id = 0, size_t size = 100000) // 10w
+    {
+        std::ifstream fp(filepath);
+        if (!fp)
+        {
+            LOG(INFO) << "open " << filepath << " fail." << std::endl
+                    << std::flush;
+            exit(1);
+        }
+        std::string line;
+        std::getline(fp, line); //跳过列名，第一行不做处理
+
+        while (std::getline(fp, line) && ids.size()<size)
+        {
+            std::string number;
+            std::istringstream readstr(line);
+            for (size_t j = 0; j <= feature_id; ++j)
+            {
+                std::getline(readstr, number, ',');
+            }
+            ids.push_back(std::atoi(number.c_str()));
+        }
+        offset = 0;
+    }
+    void init() { offset = 0; }
+    void sample(int64 *batch_ids, size_t batch_size)
+    {
+        for (size_t i = 0; offset < ids.size() && i < batch_size; ++offset, ++i)
+        {
+            batch_ids[i] = ids[offset];
+        }
+    }
+    size_t size() { return ids.size(); }
+};
+
+void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys, int batch_size) {
+  std::vector<ValuePtr<float>*> value_ptrs;
+  for (int64 i = 0; i < keys.size(); ++i) {
+    ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(128);
+    value_ptrs.push_back(tmp);
+  }
+  ASSERT_EQ(keys.size(), value_ptrs.size());
+  uint64 start = Env::Default()->NowNanos();
+  
+  for (int64 i = 0; i < keys.size();) {
+    std::vector<int64> batch_keys;
+    std::vector<ValuePtr<float>*> batch_value_ptrs;
+    for(int j = 0; j < batch_size && i < keys.size(); ++j,++i){
+      batch_keys.push_back(keys[i]);
+      batch_value_ptrs.push_back(value_ptrs[i]);
+    }
+    hashmap->BatchCommit(batch_keys, batch_value_ptrs);
+  }
+  uint64 end = Env::Default()->NowNanos();
+  uint64 result_cost = end - start;
+  LOG(INFO) << "BatchCommit time: " << result_cost << " ns";
+}
+
+void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
+  std::vector<ValuePtr<float>*> value_ptrs;
+  for (int64 i = 0; i< keys.size(); ++i) {
+    ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(128);
+    value_ptrs.push_back(tmp);
+  }
+  ASSERT_EQ(keys.size(), value_ptrs.size());
+  uint64 start = Env::Default()->NowNanos();
+  for (int64 i = 0; i< keys.size(); ++i) {
+    TF_CHECK_OK(hashmap->Lookup(keys[i], &value_ptrs[i]));
+  }
+  uint64 end = Env::Default()->NowNanos();
+  uint64 result_cost = end - start;
+  LOG(INFO) << "BatchLookup time: " << result_cost << " ns";
+}
+
+void LevelDBKVTest(int total_size, int batch_size){
+  KVInterface<int64, float>* hashmap = new LevelDBKV<int64, float>("/tmp/db_ut1");
+  hashmap->SetTotalDims(128);
+  ASSERT_EQ(hashmap->Size(), 0);
+  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
+  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, batch_size);
+  t1.join();
+  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
+  t2.join();
+}
+
+TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
+  std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
+  std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
+  for (int total_size : total_size_list) {
+    for (int batch_size : batch_size_list) {
+      LOG(INFO) << "LevelDB total_size: " << total_size << ", batch_size: " << batch_size << std::endl;
+      for(int e = 0; e < 5; e++){
+        LOG(INFO) << "epoch: " << e << std::endl;
+        LevelDBKVTest(total_size, batch_size);
+      }
+    }
+  }
+}
+
+void SSDKVTest(int total_size, int batch_size){
+  KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
+  hashmap->SetTotalDims(128);
+  ASSERT_EQ(hashmap->Size(), 0);
+  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
+  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, batch_size);
+  t1.join();
+  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
+  t2.join();
+}
+
+
+TEST(KVInterfaceTest, TestLargeSSDKV) {
+  std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
+  std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
+  for (int total_size : total_size_list) {
+    for (int batch_size : batch_size_list) {
+      LOG(INFO) << "SSD total_size: " << total_size << ", batch_size: " << batch_size;
+      for(int e = 0; e < 5; e++){
+        LOG(INFO) << "epoch: " << e;
+        SSDKVTest(total_size, batch_size);
+      }
+      
+    }
+  }
+}
+
 } // namespace
 } // namespace embedding
 } // namespace tensorflow
