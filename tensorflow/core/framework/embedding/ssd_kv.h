@@ -38,7 +38,7 @@ class SSDKV : public KVInterface<K, V> {
     counter_ = new SizeCounter<K>(8);
     app_counter_ = new SizeCounter<K>(8);
     new_value_ptr_fn_ = [](size_t size) {
-      return new NormalContiguousValuePtr<V>(size);
+      return new NormalContiguousValuePtr<V>(ev_allocator(), size);
     };
   }
 
@@ -60,9 +60,10 @@ class SSDKV : public KVInterface<K, V> {
     for (int i = 0; i < buffer_cur; ++i) {
       auto iter = hash_map.find(key_buffer[i]);
       if (iter == hash_map.end()) {
-        return errors::NotFound("Unable to find Key: ", key, " in SSDKV.");
+        return errors::NotFound("Unable to find Key: ", key_buffer[i],
+                                " in SSDKV.");
       } else {
-        iter.second.flushed = true;
+        iter->second.flushed = true;
         return Status::OK();
       }
     }
@@ -99,11 +100,10 @@ class SSDKV : public KVInterface<K, V> {
       }
       fs[current_version].seekp(0, std::ios::end);
       size_t offset = fs[current_version].tellp();
-      hash_map[key] =
-          EmbPosition(offset + buffer_cur * val_len, current_version,
-                      write_buffer + buffer_cur * val_len, false);
-      memcpy(write_buffer + buffer_cur * val_len,
-             (char*)value_ptrs[i]->GetPtr(), val_len);
+      hash_map[key] = EmbPosition(offset + buffer_cur * val_len,
+                                  current_version, buffer_cur * val_len, false);
+      memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
+             val_len);
       ++buffer_cur;
       counter_->add(key, 1);
       app_counter_->add(key, 1);
@@ -133,11 +133,11 @@ class SSDKV : public KVInterface<K, V> {
       size_t offset = fs[current_version].tellp();  // first offset
       hash_map[keys[i]] =
           EmbPosition(offset + buffer_cur * val_len, current_version,
-                      write_buffer + buffer_cur * val_len, false);
+                      buffer_cur * val_len, false);
       memcpy(write_buffer + buffer_cur * val_len,
              (char*)value_ptrs[i]->GetPtr(), val_len);
       ++buffer_cur;
-      delete value_ptr;
+      delete value_ptrs[i];
     }
     return Status::OK();
   }
@@ -153,8 +153,8 @@ class SSDKV : public KVInterface<K, V> {
     fs[current_version].seekp(0, std::ios::end);
     size_t offset = fs[current_version].tellp();
     hash_map[key] = EmbPosition(offset + buffer_cur * val_len, current_version,
-                                write_buffer + buffer_cur * val_len, false);
-    memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptrs[i]->GetPtr(),
+                                buffer_cur * val_len, false);
+    memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
            val_len);
     ++buffer_cur;
     delete value_ptr;
@@ -182,8 +182,8 @@ class SSDKV : public KVInterface<K, V> {
         fs[posi.version].seekg(posi.offset, std::ios::beg);
         fs[posi.version].read((char*)(val->GetPtr()), val_len);
       } else {
-        memcpy((char*)value_ptrs[i]->GetPtr(),
-               write_buffer + posi.buffer_offset, val_len);
+        memcpy((char*)val->GetPtr(), write_buffer + posi.buffer_offset,
+               val_len);
       }
       value_ptr_list->push_back(val);
     }
