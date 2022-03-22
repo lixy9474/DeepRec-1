@@ -154,9 +154,9 @@ class StorageManager {
     int64 temp = alloc_len_ * slot_num;
     if (total_dims_ == 0) {
       total_dims_ = temp;
-      if (sc_.type == StorageType::LEVELDB) {
+      if (sc_.type == StorageType::LEVELDB || sc_.type == StorageType::SSD) {
         kvs_[0].first->SetTotalDims(total_dims_);
-      } else if (sc_.type == StorageType::DRAM_LEVELDB) {
+      } else if (sc_.type == StorageType::DRAM_LEVELDB || sc_.type == StorageType::DRAM_SSD) {
         kvs_[1].first->SetTotalDims(total_dims_);
       }
       if (hash_table_count_ > 1) {

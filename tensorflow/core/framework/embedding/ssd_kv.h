@@ -54,6 +54,7 @@ class SSDKV : public KVInterface<K, V> {
       fs[i].close();
     }
     delete[] write_buffer;
+    delete[] key_buffer;
   }
 
   Status UpdateFlushStatus() {
@@ -104,6 +105,7 @@ class SSDKV : public KVInterface<K, V> {
                                   current_version, buffer_cur * val_len, false);
       memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
              val_len);
+      key_buffer[buffer_cur] = key;
       ++buffer_cur;
       counter_->add(key, 1);
       app_counter_->add(key, 1);
@@ -136,6 +138,7 @@ class SSDKV : public KVInterface<K, V> {
                       buffer_cur * val_len, false);
       memcpy(write_buffer + buffer_cur * val_len,
              (char*)value_ptrs[i]->GetPtr(), val_len);
+      key_buffer[buffer_cur] = keys[i];
       ++buffer_cur;
       delete value_ptrs[i];
     }
@@ -156,6 +159,7 @@ class SSDKV : public KVInterface<K, V> {
                                 buffer_cur * val_len, false);
     memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
            val_len);
+    key_buffer[buffer_cur] = key;
     ++buffer_cur;
     delete value_ptr;
     return Status::OK();
@@ -222,6 +226,12 @@ class SSDKV : public KVInterface<K, V> {
         : offset(o), version(v), buffer_offset(bo), flushed(f) {}
     EmbPosition()
         : offset(-1), version(-1), buffer_offset(-1), flushed(false) {}
+    void Print() {
+      LOG(INFO) << "EmbPosition: "
+                << "offset= " << offset << ", version= " << version
+                << ", buffer_offset= " << buffer_offset
+                << ", flushed= " << flushed;
+    }
   };
   google::dense_hash_map<K, EmbPosition> hash_map;
   std::vector<std::fstream> fs;

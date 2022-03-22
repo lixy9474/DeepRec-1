@@ -312,7 +312,7 @@ TEST(EmbeddingVariableTest, TestEVExportSmallLockless) {
     }
   }
 }
-
+/*
 TEST(EmbeddingVariableTest, TestEVExportLargeLockless) {
 
   int64 value_size = 128;
@@ -390,7 +390,7 @@ TEST(EmbeddingVariableTest, TestEVExportLargeLockless) {
     }
   }
 }
-
+*/
 void multi_insertion(EmbeddingVar<int64, float>* variable, int64 value_size){
   for (long j = 0; j < 5; j++) {
     ValuePtr<float>* value_ptr = nullptr;
@@ -1121,7 +1121,7 @@ public:
 void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys, int batch_size) {
   std::vector<ValuePtr<float>*> value_ptrs;
   for (int64 i = 0; i < keys.size(); ++i) {
-    ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(128);
+    ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(ev_allocator(), 128);
     value_ptrs.push_back(tmp);
   }
   ASSERT_EQ(keys.size(), value_ptrs.size());
@@ -1144,7 +1144,7 @@ void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys, in
 void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
   std::vector<ValuePtr<float>*> value_ptrs;
   for (int64 i = 0; i< keys.size(); ++i) {
-    ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(128);
+    ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(ev_allocator(), 128);
     value_ptrs.push_back(tmp);
   }
   ASSERT_EQ(keys.size(), value_ptrs.size());
@@ -1168,19 +1168,19 @@ void LevelDBKVTest(int total_size, int batch_size){
   t2.join();
 }
 
-TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
-  std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
-  std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
-  for (int total_size : total_size_list) {
-    for (int batch_size : batch_size_list) {
-      LOG(INFO) << "LevelDB total_size: " << total_size << ", batch_size: " << batch_size << std::endl;
-      for(int e = 0; e < 5; e++){
-        LOG(INFO) << "epoch: " << e << std::endl;
-        LevelDBKVTest(total_size, batch_size);
-      }
-    }
-  }
-}
+// TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
+//   std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
+//   std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
+//   for (int total_size : total_size_list) {
+//     for (int batch_size : batch_size_list) {
+//       LOG(INFO) << "LevelDB total_size: " << total_size << ", batch_size: " << batch_size << std::endl;
+//       for(int e = 0; e < 5; e++){
+//         LOG(INFO) << "epoch: " << e << std::endl;
+//         LevelDBKVTest(total_size, batch_size);
+//       }
+//     }
+//   }
+// }
 
 void SSDKVTest(int total_size, int batch_size){
   KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
@@ -1200,7 +1200,7 @@ TEST(KVInterfaceTest, TestLargeSSDKV) {
   for (int total_size : total_size_list) {
     for (int batch_size : batch_size_list) {
       LOG(INFO) << "SSD total_size: " << total_size << ", batch_size: " << batch_size;
-      for(int e = 0; e < 5; e++){
+      for(int e = 0; e < 1; e++){
         LOG(INFO) << "epoch: " << e;
         SSDKVTest(total_size, batch_size);
       }
