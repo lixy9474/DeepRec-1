@@ -4,6 +4,8 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <iomanip>
+#include <iostream>
 
 #include "sparsehash/dense_hash_map"
 #include "tensorflow/core/framework/embedding/kv_interface.h"
@@ -49,10 +51,15 @@ class SSDKV : public KVInterface<K, V> {
     val_len = sizeof(FixedLengthHeader) + total_dims_ * sizeof(V);
     unsigned int max_key_count = 1 + int(buffer_size / val_len);
     key_buffer = new K[max_key_count];
-    max_app_size = 10 * 1024 * 1024 / val_len;  // 10MB
+    max_app_count = 10 * 1024 * 1024 / val_len;  // 10MB
   }
 
   ~SSDKV() {
+    if (buffer_cur > 0) {
+      emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
+      TF_CHECK_OK(UpdateFlushStatus());
+      buffer_cur = 0;
+    }
     for (int i = 0; i < emb_files.size(); i++) {
       emb_files[i].fs.close();
     }
@@ -104,6 +111,11 @@ class SSDKV : public KVInterface<K, V> {
       spin_wr_lock l(mu);
       if (buffer_cur * val_len + val_len > buffer_size) {
         emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
+        emb_files[current_version].app_count += buffer_cur;
+        if (emb_files[current_version].app_count >= max_app_count) {
+          ++current_version;
+          emb_files.push_back(EmbFile(path_, current_version));
+        }
         TF_CHECK_OK(UpdateFlushStatus());
         buffer_cur = 0;
       }
@@ -135,7 +147,11 @@ class SSDKV : public KVInterface<K, V> {
       total_app_counter_->add(keys[i], 1);
       if (buffer_cur * val_len + val_len > buffer_size) {
         emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
-        // LOG(INFO) << "write: " << buffer_cur << std::endl;
+        emb_files[current_version].app_count += buffer_cur;
+        if (emb_files[current_version].app_count >= max_app_count) {
+          ++current_version;
+          emb_files.push_back(EmbFile(path_, current_version));
+        }
         TF_CHECK_OK(UpdateFlushStatus());
         buffer_cur = 0;
       }
@@ -158,6 +174,11 @@ class SSDKV : public KVInterface<K, V> {
     total_app_counter_->add(key, 1);
     if (buffer_cur * val_len + val_len > buffer_size) {
       emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
+      emb_files[current_version].app_count += buffer_cur;
+      if (emb_files[current_version].app_count >= max_app_count) {
+        ++current_version;
+        emb_files.push_back(EmbFile(path_, current_version));
+      }
       TF_CHECK_OK(UpdateFlushStatus());
       buffer_cur = 0;
     }
@@ -207,8 +228,9 @@ class SSDKV : public KVInterface<K, V> {
   void FreeValuePtr(ValuePtr<V>* value_ptr) { delete value_ptr; }
 
   std::string DebugString() const {
-    return strings::StrCat("counter_->size(): ", counter_->size(),
-                           "total_app_counter_->size(): ", total_app_counter_->size());
+    return strings::StrCat(
+        "counter_->size(): ", counter_->size(),
+        "total_app_counter_->size(): ", total_app_counter_->size());
   }
 
  private:
@@ -259,17 +281,20 @@ class SSDKV : public KVInterface<K, V> {
   struct EmbFile {
     std::fstream fs;
     bool active;
-    SizeCounter<K>* app_counter;
+    size_t app_count;
     EmbFile(std::string path_, size_t version) {
+      std::stringstream ss;
+      ss << std::setw(4) << std::setfill('0') << version << ".emb";
       fs = std::fstream(
-          path_ + std::to_string(version),
+          path_ + ss.str(),
           std::ios::app | std::ios::in | std::ios::out | std::ios::binary);
       active = true;
       CHECK(fs.good());
+      app_count = 0;
     }
   };
   float compaction_ration;
-  size_t max_app_size;
+  size_t max_app_count;
   google::dense_hash_map<K, EmbPosition> hash_map;
   std::vector<EmbFile> emb_files;
   size_t current_version;
