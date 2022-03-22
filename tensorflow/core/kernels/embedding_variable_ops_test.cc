@@ -1186,19 +1186,19 @@ void LevelDBKVTest(int total_size, int batch_size){
   t2.join();
 }
 
-// TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
-//   std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
-//   std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
-//   for (int total_size : total_size_list) {
-//     for (int batch_size : batch_size_list) {
-//       LOG(INFO) << "LevelDB total_size: " << total_size << ", batch_size: " << batch_size << std::endl;
-//       for(int e = 0; e < 5; e++){
-//         LOG(INFO) << "epoch: " << e << std::endl;
-//         LevelDBKVTest(total_size, batch_size);
-//       }
-//     }
-//   }
-// }
+TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
+  std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
+  std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
+  for (int total_size : total_size_list) {
+    for (int batch_size : batch_size_list) {
+      LOG(INFO) << "LevelDB total_size: " << total_size << ", batch_size: " << batch_size << std::endl;
+      for(int e = 0; e < 5; e++){
+        LOG(INFO) << "epoch: " << e << std::endl;
+        LevelDBKVTest(total_size, batch_size);
+      }
+    }
+  }
+}
 
 void SSDKVTest(int total_size, int batch_size){
   KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
@@ -1218,7 +1218,7 @@ TEST(KVInterfaceTest, TestLargeSSDKV) {
   for (int total_size : total_size_list) {
     for (int batch_size : batch_size_list) {
       LOG(INFO) << "SSD total_size: " << total_size << ", batch_size: " << batch_size;
-      for(int e = 0; e < 1; e++){
+      for(int e = 0; e < 5; e++){
         LOG(INFO) << "epoch: " << e;
         SSDKVTest(total_size, batch_size);
       }

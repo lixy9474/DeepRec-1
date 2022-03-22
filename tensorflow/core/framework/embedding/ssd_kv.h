@@ -10,6 +10,7 @@
 #include "tensorflow/core/framework/embedding/leveldb_kv.h"
 #include "tensorflow/core/framework/embedding/value_ptr.h"
 #include "tensorflow/core/lib/core/status.h"
+#include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/lib/io/path.h"
 
 namespace tensorflow {
@@ -40,6 +41,9 @@ class SSDKV : public KVInterface<K, V> {
     new_value_ptr_fn_ = [](size_t size) {
       return new NormalContiguousValuePtr<V>(ev_allocator(), size);
     };
+    compaction_thread_ =
+        Env::Default()->StartThread(ThreadOptions(), "SSDKV_DynamicCompaction",
+                                    [this]() { DynamicCompaction(); });
   }
 
   void SetTotalDims(int total_dims) {
@@ -55,6 +59,11 @@ class SSDKV : public KVInterface<K, V> {
     }
     delete[] write_buffer;
     delete[] key_buffer;
+    if (compaction_thread_) {
+      mutex_lock l(mu_);
+      shutdown_cv_.notify_all();
+      delete compaction_thread_;
+    }
   }
 
   Status UpdateFlushStatus() {
@@ -204,6 +213,18 @@ class SSDKV : public KVInterface<K, V> {
   }
 
  private:
+  void DynamicCompaction() {
+    while (true) {
+      mutex_lock l(mu_);
+      // spin_wr_lock spinl(mu);
+      const int kTimeoutMilliseconds = 10 * 1 * 1000;
+      WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
+      LOG(INFO) << "10000000 ns "
+                << std::to_string(Env::Default()->NowMicros());
+    }
+  }
+
+ private:
   size_t val_len;
   char* write_buffer;
   K* key_buffer;
@@ -214,6 +235,9 @@ class SSDKV : public KVInterface<K, V> {
   std::string path_;
   std::function<ValuePtr<V>*(size_t)> new_value_ptr_fn_;
   int total_dims_;
+  Thread* compaction_thread_;
+  mutex mu_;
+  condition_variable shutdown_cv_;
 
   mutable easy_spinrwlock_t mu = EASY_SPINRWLOCK_INITIALIZER;
   class EmbPosition {
