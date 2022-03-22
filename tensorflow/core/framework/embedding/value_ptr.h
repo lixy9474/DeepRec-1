@@ -277,6 +277,18 @@ class ValuePtr {
     LOG(FATAL) << "Unsupport FreqCounter in subclass of ValuePtrBase";
   }
 
+  virtual void PrintValue(size_t size){
+    LOG(FATAL) << "Unsupport PrintValue in subclass of ValuePtrBase";
+  }
+
+  virtual bool EqualTo(ValuePtr<V>* value_ptr, size_t size) {
+    LOG(FATAL) << "Unsupport EqualTo in subclass of ValuePtrBase";
+  }
+
+  virtual void SetValue(V val, size_t size){
+    LOG(FATAL) << "Unsupport SetValue in subclass of ValuePtrBase";
+  }
+
  protected:
   void* ptr_;
   std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
@@ -407,6 +419,42 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
 
   void AddFreq(int64 count) {
     ((FixedLengthHeader*)this->ptr_)->AddFreq(count);
+  }
+
+  void PrintValue(size_t size) {
+    std::string val_str;
+    val_str += "Step=" + std::to_string(GetStep());
+    val_str += ", Freq=" +std::to_string(GetFreq())+", Value=[";
+    for(int i = 0; i < size-1; ++i){
+      val_str += std::to_string(*((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i)) + ", ";
+    }
+    val_str += std::to_string(*((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + size - 1)) + "]\n";
+    LOG(INFO) << val_str;
+  }
+
+  bool EqualTo(ValuePtr<V>* value_ptr, size_t size) {
+    if (GetStep() != value_ptr->GetStep()) {
+      return false;
+    }
+    if (GetFreq() != value_ptr->GetFreq()) {
+      return false;
+    }
+    for(int i = 0; i < size; ++i) {
+      // LOG(INFO) << std::to_string(*((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i));
+      // LOG(INFO) << std::to_string(*((V*)value_ptr->GetPtr() + sizeof(FixedLengthHeader) / sizeof(V) + i));
+      if (*((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) != *((V*)value_ptr->GetPtr() + sizeof(FixedLengthHeader) / sizeof(V) + i)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void SetValue(V val, size_t size){
+    SetStep(int64(val));
+    SetFreq(int64(val));
+    for(int i = 0; i < size; ++i) {
+      *((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) = val;
+    }
   }
 };
 

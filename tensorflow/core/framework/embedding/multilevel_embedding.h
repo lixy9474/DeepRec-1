@@ -160,7 +160,7 @@ class StorageManager {
         kvs_[1].first->SetTotalDims(total_dims_);
       }
       if (hash_table_count_ > 1) {
-        cache_capacity_ = 1024 * 1024 * 1024 / total_dims_ * sizeof(V); 
+        cache_capacity_ = 1024 * 1024 * 1024 / (total_dims_ * sizeof(V)); // 1 GB
         done_ = true;
         LOG(INFO) << "Cache cache_capacity: " << cache_capacity_;
       }

@@ -65,9 +65,9 @@ class SSDKV : public KVInterface<K, V> {
                                 " in SSDKV.");
       } else {
         iter->second.flushed = true;
-        return Status::OK();
       }
     }
+    return Status::OK();
   }
 
   Status Lookup(K key, ValuePtr<V>** value_ptr) {
@@ -96,7 +96,7 @@ class SSDKV : public KVInterface<K, V> {
       spin_wr_lock l(mu);
       if (buffer_cur * val_len + val_len > buffer_size) {
         fs[current_version].write(write_buffer, buffer_cur * val_len);
-        UpdateFlushStatus();
+        TF_CHECK_OK(UpdateFlushStatus());
         buffer_cur = 0;
       }
       fs[current_version].seekp(0, std::ios::end);
@@ -128,7 +128,7 @@ class SSDKV : public KVInterface<K, V> {
       if (buffer_cur * val_len + val_len > buffer_size) {
         fs[current_version].write(write_buffer, buffer_cur * val_len);
         // LOG(INFO) << "write: " << buffer_cur << std::endl;
-        UpdateFlushStatus();
+        TF_CHECK_OK(UpdateFlushStatus());
         buffer_cur = 0;
       }
       fs[current_version].seekp(0, std::ios::end);  // seek to end
@@ -150,7 +150,7 @@ class SSDKV : public KVInterface<K, V> {
     app_counter_->add(key, 1);
     if (buffer_cur * val_len + val_len > buffer_size) {
       fs[current_version].write(write_buffer, buffer_cur * val_len);
-      UpdateFlushStatus();
+      TF_CHECK_OK(UpdateFlushStatus());
       buffer_cur = 0;
     }
     fs[current_version].seekp(0, std::ios::end);

@@ -1122,6 +1122,7 @@ void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys, in
   std::vector<ValuePtr<float>*> value_ptrs;
   for (int64 i = 0; i < keys.size(); ++i) {
     ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(ev_allocator(), 128);
+    tmp->SetValue(float(keys[i]), 128);
     value_ptrs.push_back(tmp);
   }
   ASSERT_EQ(keys.size(), value_ptrs.size());
@@ -1151,6 +1152,23 @@ void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
   uint64 start = Env::Default()->NowNanos();
   for (int64 i = 0; i< keys.size(); ++i) {
     TF_CHECK_OK(hashmap->Lookup(keys[i], &value_ptrs[i]));
+    // LOG(INFO) << "value_ptrs[i]->PrintValue(128);";
+    // value_ptrs[i]->PrintValue(128);
+    ValuePtr<float>* ori_tmp= new NormalContiguousValuePtr<float>(ev_allocator(), 128);
+    ori_tmp->SetValue(float(keys[i]), 128);
+    // LOG(INFO) << "ori_tmp->SetValue(float(keys[i]), 128);";
+    // ori_tmp->PrintValue(128);
+    // LOG(INFO) << "value_ptrs[i]->EqualTo(*ori_tmp, 128)" << value_ptrs[i]->EqualTo(ori_tmp, 128);
+
+    // ASSERT_EQ(value_ptrs[i]->EqualTo(ori_tmp, 128), true);
+    if(!value_ptrs[i]->EqualTo(ori_tmp, 128)){
+      LOG(INFO) << "keys[i]" << keys[i];
+      LOG(INFO) << "value_ptrs[i]->PrintValue(128);";
+      value_ptrs[i]->PrintValue(128);
+      LOG(INFO) << "ori_tmp->SetValue(float(keys[i]), 128);";
+      ori_tmp->PrintValue(128);
+    }
+    delete ori_tmp;
   }
   uint64 end = Env::Default()->NowNanos();
   uint64 result_cost = end - start;
