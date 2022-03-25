@@ -30,8 +30,7 @@ class SSDKV : public KVInterface<K, V> {
     hash_map.set_empty_key(-1);
     hash_map.set_deleted_key(-2);
     current_version = 0;
-    buffer_size = 4 * 1024 * 1024;  // Write 4KB at once.
-    write_buffer = new char[buffer_size];
+    buffer_size = 4 * 1024;  // Write 4MB at once.
     buffer_cur = 0;
     emb_files.push_back(EmbFile(path_, current_version));
 
@@ -41,14 +40,13 @@ class SSDKV : public KVInterface<K, V> {
       return new NormalContiguousValuePtr<V>(ev_allocator(), size);
     };
     compaction_ration = 2;  // unique key 到达存储的 key 的compaction_ration倍时
-    compaction_thread_ =
-        Env::Default()->StartThread(ThreadOptions(), "SSDKV_DynamicCompaction",
-                                    [this]() { DynamicCompaction(); });
   }
 
   void SetTotalDims(int total_dims) {
     total_dims_ = total_dims;
     val_len = sizeof(FixedLengthHeader) + total_dims_ * sizeof(V);
+    buffer_size = std::max(buffer_size, val_len);
+    write_buffer = new char[buffer_size];
     unsigned int max_key_count = 1 + int(buffer_size / val_len);
     key_buffer = new K[max_key_count];
     max_app_count = 10 * 1024 * 1024 / val_len;  // 10MB
@@ -65,11 +63,6 @@ class SSDKV : public KVInterface<K, V> {
     }
     delete[] write_buffer;
     delete[] key_buffer;
-    if (compaction_thread_) {
-      mutex_lock l(mu_);
-      shutdown_cv_.notify_all();
-      delete compaction_thread_;
-    }
   }
 
   Status UpdateFlushStatus() {
@@ -86,6 +79,7 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   Status Lookup(K key, ValuePtr<V>** value_ptr) {
+    SingleThreadDynamicCompaction();
     spin_rd_lock l(mu);
     auto iter = hash_map.find(key);
     if (iter == hash_map.end()) {
@@ -106,9 +100,10 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   Status Insert(K key, const ValuePtr<V>* value_ptr) {
+    SingleThreadDynamicCompaction();
+    spin_wr_lock l(mu);
     auto iter = hash_map.find(key);
     if (iter == hash_map.end()) {
-      spin_wr_lock l(mu);
       if (buffer_cur * val_len + val_len > buffer_size) {
         emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
         emb_files[current_version].app_count += buffer_cur;
@@ -142,6 +137,7 @@ class SSDKV : public KVInterface<K, V> {
 
   Status BatchCommit(std::vector<K> keys,
                      std::vector<ValuePtr<V>*> value_ptrs) {
+    SingleThreadDynamicCompaction();
     spin_wr_lock l(mu);
     total_app_count += keys.size();
     for (int i = 0; i < keys.size(); i++) {
@@ -170,6 +166,7 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   Status Commit(K key, const ValuePtr<V>* value_ptr) {
+    SingleThreadDynamicCompaction();
     spin_wr_lock l(mu);
     total_app_count++;
     if (buffer_cur * val_len + val_len > buffer_size) {
@@ -233,66 +230,52 @@ class SSDKV : public KVInterface<K, V> {
   }
 
  private:
-  void DynamicCompaction() {
-    while (true) {
-      // LOG(INFO) << "10000000 time "
-      //           << std::to_string(Env::Default()->NowMicros());
-      mutex_lock l(mu_);
-      const int kTimeoutMilliseconds = 10 * 1;
-      WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
-      // LOG(INFO) << "10000000 time "
-      // << std::to_string(Env::Default()->NowMicros());
-      // LOG(INFO) << "DynamicCompaction TEST! " << hash_map.size() << "   "
-      //           << total_app_count;
-      if (hash_map.size() * compaction_ration < total_app_count) {
-        // LOG(INFO) << "DynamicCompaction Start!";
-        spin_wr_lock l2(mu);
-        // =====
-        emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
-        emb_files[current_version].app_count += buffer_cur;
-        TF_CHECK_OK(UpdateFlushStatus());
-        size_t save_version = current_version;
-        ++current_version;  // 无论如何都+1
-        emb_files.push_back(EmbFile(path_, current_version));
-        buffer_cur = 0;
-        ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
-        total_app_count = hash_map.size();  // important
-        for (const auto it : hash_map) {
-          EmbPosition posi = it.second;
-          if (!posi.flushed) {
-            LOG(INFO) << "BUG!!!!!!!";
-          }
-          emb_files[posi.version].fs.seekg(posi.offset, std::ios::beg);
-          emb_files[posi.version].fs.read((char*)(val->GetPtr()), val_len);
+  void SingleThreadDynamicCompaction() {
+    spin_wr_lock l(mu);
+    if (hash_map.size() * compaction_ration < total_app_count) {
+      emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
+      emb_files[current_version].app_count += buffer_cur;
+      TF_CHECK_OK(UpdateFlushStatus());
+      size_t save_version = current_version;
+      ++current_version;  // 无论如何都+1
+      emb_files.push_back(EmbFile(path_, current_version));
+      buffer_cur = 0;
+      ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
+      total_app_count = hash_map.size();  // important
+      for (const auto it : hash_map) {
+        EmbPosition posi = it.second;
+        if (!posi.flushed) {
+          LOG(INFO) << "BUG!!!!!!!";
+          posi.Print();
+        }
+        emb_files[posi.version].fs.seekg(posi.offset, std::ios::beg);
+        emb_files[posi.version].fs.read((char*)(val->GetPtr()), val_len);
 
-          if (buffer_cur * val_len + val_len > buffer_size) {
-            emb_files[current_version].fs.write(write_buffer,
-                                                buffer_cur * val_len);
-            emb_files[current_version].app_count += buffer_cur;
-            if (emb_files[current_version].app_count >= max_app_count) {
-              ++current_version;
-              emb_files.push_back(EmbFile(path_, current_version));
-            }
-            TF_CHECK_OK(UpdateFlushStatus());
-            buffer_cur = 0;
+        if (buffer_cur * val_len + val_len > buffer_size) {
+          emb_files[current_version].fs.write(write_buffer,
+                                              buffer_cur * val_len);
+          emb_files[current_version].app_count += buffer_cur;
+          if (emb_files[current_version].app_count >= max_app_count) {
+            ++current_version;
+            emb_files.push_back(EmbFile(path_, current_version));
           }
-          emb_files[current_version].fs.seekp(0, std::ios::end);  // seek to end
-          size_t offset =
-              emb_files[current_version].fs.tellp();  // first offset
-          hash_map[it.first] =
-              EmbPosition(offset + buffer_cur * val_len, current_version,
-                          buffer_cur * val_len, false);
-          memcpy(write_buffer + buffer_cur * val_len, (char*)val->GetPtr(),
-                 val_len);
-          key_buffer[buffer_cur] = it.first;
-          ++buffer_cur;
+          TF_CHECK_OK(UpdateFlushStatus());
+          buffer_cur = 0;
         }
-        // remove file
-        for (int i = 0; i <= save_version; ++i) {
-          std::remove(emb_files[i].filepath.c_str());
-        }
+        emb_files[current_version].fs.seekp(0, std::ios::end);  // seek to end
+        size_t offset = emb_files[current_version].fs.tellp();  // first offset
+        hash_map[it.first] =
+            EmbPosition(offset + buffer_cur * val_len, current_version,
+                        buffer_cur * val_len, false);
+        memcpy(write_buffer + buffer_cur * val_len, (char*)val->GetPtr(),
+               val_len);
+        key_buffer[buffer_cur] = it.first;
+        ++buffer_cur;
       }
-      // =====
+      // remove file
+      for (int i = 0; i <= save_version; ++i) {
+        std::remove(emb_files[i].filepath.c_str());
+      }
     }
   }
 
@@ -307,9 +290,6 @@ class SSDKV : public KVInterface<K, V> {
   std::string path_;
   std::function<ValuePtr<V>*(size_t)> new_value_ptr_fn_;
   int total_dims_;
-  Thread* compaction_thread_;
-  mutex mu_;
-  condition_variable shutdown_cv_;
 
   mutable easy_spinrwlock_t mu = EASY_SPINRWLOCK_INITIALIZER;
   class EmbPosition {
