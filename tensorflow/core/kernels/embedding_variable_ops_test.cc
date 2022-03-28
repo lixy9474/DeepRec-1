@@ -1170,15 +1170,8 @@ void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
   uint64 start = Env::Default()->NowNanos();
   for (int64 i = 0; i< keys.size(); ++i) {
     TF_CHECK_OK(hashmap->Lookup(keys[i], &value_ptrs[i]));
-    // LOG(INFO) << "value_ptrs[i]->PrintValue(128);";
-    // value_ptrs[i]->PrintValue(128);
     ValuePtr<float>* ori_tmp= new NormalContiguousValuePtr<float>(ev_allocator(), 128);
     ori_tmp->SetValue(float(keys[i]), 128);
-    // LOG(INFO) << "ori_tmp->SetValue(float(keys[i]), 128);";
-    // ori_tmp->PrintValue(128);
-    // LOG(INFO) << "value_ptrs[i]->EqualTo(*ori_tmp, 128)" << value_ptrs[i]->EqualTo(ori_tmp, 128);
-
-    // ASSERT_EQ(value_ptrs[i]->EqualTo(ori_tmp, 128), true);
     if(!value_ptrs[i]->EqualTo(ori_tmp, 128)){
       LOG(INFO) << "keys[i]" << keys[i];
       LOG(INFO) << "value_ptrs[i]->PrintValue(128);";
@@ -1218,6 +1211,7 @@ TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
     }
   }
 }
+*/
 
 void SSDKVTest(int total_size, int batch_size){
   KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
@@ -1245,9 +1239,9 @@ TEST(KVInterfaceTest, TestLargeSSDKV) {
     }
   }
 }
-*/
 
 
+/*
 void LevelDBKVSingleTest(int total_size){
   KVInterface<int64, float>* hashmap = new LevelDBKV<int64, float>("/tmp/db_ut1");
   hashmap->SetTotalDims(128);
@@ -1300,7 +1294,7 @@ TEST(KVInterfaceTest, TestLargeSingleSSDKV) {
     }
   }
 }
-
+*/
 
 } // namespace
 } // namespace embedding
