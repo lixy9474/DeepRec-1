@@ -30,6 +30,7 @@ class SSDKV : public KVInterface<K, V> {
     hash_map.set_empty_key(-1);
     hash_map.set_deleted_key(-2);
     current_version = 0;
+    current_offset = 0;
     buffer_size = 4 * 1024;  // Write 4MB at once.
     buffer_cur = 0;
     emb_files.push_back(EmbFile(path_, current_version));
@@ -109,15 +110,15 @@ class SSDKV : public KVInterface<K, V> {
         emb_files[current_version].app_count += buffer_cur;
         if (emb_files[current_version].app_count >= max_app_count) {
           ++current_version;
+          current_offset = 0;
           emb_files.push_back(EmbFile(path_, current_version));
         }
         TF_CHECK_OK(UpdateFlushStatus());
         buffer_cur = 0;
       }
-      emb_files[current_version].fs.seekp(0, std::ios::end);
-      size_t offset = emb_files[current_version].fs.tellp();
-      hash_map[key] = EmbPosition(offset + buffer_cur * val_len,
-                                  current_version, buffer_cur * val_len, false);
+      hash_map[key] = EmbPosition(current_offset, current_version,
+                                  buffer_cur * val_len, false);
+      current_offset += val_len;
       memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
              val_len);
       key_buffer[buffer_cur] = key;
@@ -146,16 +147,15 @@ class SSDKV : public KVInterface<K, V> {
         emb_files[current_version].app_count += buffer_cur;
         if (emb_files[current_version].app_count >= max_app_count) {
           ++current_version;
+          current_offset = 0;
           emb_files.push_back(EmbFile(path_, current_version));
         }
         TF_CHECK_OK(UpdateFlushStatus());
         buffer_cur = 0;
       }
-      emb_files[current_version].fs.seekp(0, std::ios::end);  // seek to end
-      size_t offset = emb_files[current_version].fs.tellp();  // first offset
-      hash_map[keys[i]] =
-          EmbPosition(offset + buffer_cur * val_len, current_version,
-                      buffer_cur * val_len, false);
+      hash_map[keys[i]] = EmbPosition(current_offset, current_version,
+                                      buffer_cur * val_len, false);
+      current_offset += val_len;
       memcpy(write_buffer + buffer_cur * val_len,
              (char*)value_ptrs[i]->GetPtr(), val_len);
       key_buffer[buffer_cur] = keys[i];
@@ -174,15 +174,15 @@ class SSDKV : public KVInterface<K, V> {
       emb_files[current_version].app_count += buffer_cur;
       if (emb_files[current_version].app_count >= max_app_count) {
         ++current_version;
+        current_offset = 0;
         emb_files.push_back(EmbFile(path_, current_version));
       }
       TF_CHECK_OK(UpdateFlushStatus());
       buffer_cur = 0;
     }
-    emb_files[current_version].fs.seekp(0, std::ios::end);
-    size_t offset = emb_files[current_version].fs.tellp();
-    hash_map[key] = EmbPosition(offset + buffer_cur * val_len, current_version,
+    hash_map[key] = EmbPosition(current_offset, current_version,
                                 buffer_cur * val_len, false);
+    current_offset += val_len;
     memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
            val_len);
     key_buffer[buffer_cur] = key;
@@ -238,6 +238,7 @@ class SSDKV : public KVInterface<K, V> {
       TF_CHECK_OK(UpdateFlushStatus());
       size_t save_version = current_version;
       ++current_version;  // 无论如何都+1
+      current_offset = 0;
       emb_files.push_back(EmbFile(path_, current_version));
       buffer_cur = 0;
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
@@ -257,16 +258,15 @@ class SSDKV : public KVInterface<K, V> {
           emb_files[current_version].app_count += buffer_cur;
           if (emb_files[current_version].app_count >= max_app_count) {
             ++current_version;
+            current_offset = 0;
             emb_files.push_back(EmbFile(path_, current_version));
           }
           TF_CHECK_OK(UpdateFlushStatus());
           buffer_cur = 0;
         }
-        emb_files[current_version].fs.seekp(0, std::ios::end);  // seek to end
-        size_t offset = emb_files[current_version].fs.tellp();  // first offset
-        hash_map[it.first] =
-            EmbPosition(offset + buffer_cur * val_len, current_version,
-                        buffer_cur * val_len, false);
+        hash_map[it.first] = EmbPosition(current_offset, current_version,
+                                         buffer_cur * val_len, false);
+        current_offset += val_len;
         memcpy(write_buffer + buffer_cur * val_len, (char*)val->GetPtr(),
                val_len);
         key_buffer[buffer_cur] = it.first;
@@ -332,6 +332,7 @@ class SSDKV : public KVInterface<K, V> {
   google::dense_hash_map<K, EmbPosition> hash_map;
   std::vector<EmbFile> emb_files;
   size_t current_version;
+  size_t current_offset;
 };
 
 }  // namespace tensorflow
