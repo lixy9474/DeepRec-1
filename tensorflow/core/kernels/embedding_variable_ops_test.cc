@@ -1108,12 +1108,14 @@ public:
         offset = 0;
     }
     void init() { offset = 0; }
-    void sample(int64 *batch_ids, size_t batch_size)
+    size_t sample(int64 *batch_ids, size_t batch_size)
     {
-        for (size_t i = 0; offset < ids.size() && i < batch_size; ++offset, ++i)
+        size_t i = 0;
+        for (i = 0; offset < ids.size() && i < batch_size; ++offset, ++i)
         {
             batch_ids[i] = ids[offset];
         }
+        return i;
     }
     size_t size() { return ids.size(); }
 };
@@ -1298,6 +1300,128 @@ TEST(KVInterfaceTest, TestLargeSingleSSDKV) {
   }
 }
 */
+
+void BatchEviction(KVInterface<int64, float>* hashmap, std::vector<int64> keys, int batch_size, size_t cache_capacity_, mutex& mu_, condition_variable& shutdown_cv_, bool& shutdown_) {
+  // Env* env = Env::Default();
+  const int kSize = 1000;
+  // if (cache_capacity_ == -1) {
+  //   while (true) {
+  //     mutex_lock l(mu_);
+  //     if (done_) {
+  //       break;
+  //     }
+  //   }
+  // }
+  K evic_ids[kSize];
+  while (true) {
+    mutex_lock l(mu_);
+    if (shutdown_) {
+      break;
+    }
+    const int kTimeoutMilliseconds = 10 * 1;
+    WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
+
+    int cache_count = cache_->size();
+    if (cache_count > cache_capacity_) {
+      // eviction
+      int k_size = cache_count - cache_capacity_;
+      k_size = std::min(k_size, kSize);
+      size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
+      ValuePtr<V>* value_ptr;
+      for (int64 i = 0; i < true_size; ++i) {
+        if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
+          TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
+          TF_CHECK_OK(kvs_[1].first->Commit(evic_ids[i], value_ptr));
+          // delete value_ptr is nessary;
+        } else {
+          // bypass
+        }
+      }
+    }
+  }
+}
+
+
+void UpdateValuePtrAdd(std::vector<std::pair<KVInterface<K, V>*, Allocator*>>& kvs_, BatchCache<K>* cache_, DataLoader& dl, int batch_size, mutex& mu_, condition_variable& shutdown_cv_, bool& shutdown_) {
+  mutex_lock l(mu_);
+  std::vector<ValuePtr<float>*> value_ptrs(nullptr, batch_size);
+  int64 *batch_ids = new int64[batch_size];
+  size_t true_size;
+  true_size = dl.sample(batch_ids, batch_size);
+  cache_->add_to_rank(batch_ids, true_size);
+  int level = 0;
+  while (true_size > 0){
+      for (int i = 0; i < true_size; ++i){
+        bool found = false;
+        for (; level < hash_table_count_; ++level) {
+        Status s = kvs_[level].first->Lookup(batch_ids[i], &value_ptrs[i]);
+        if (s.ok()) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        value_ptrs[i] = new NormalContiguousValuePtr<V>(ev_allocator(), 128);;
+        value_ptrs[i]->SetValue(float(batch_ids[i]), 128);
+      }
+      if (level || !found) {
+        Status s = kvs_[0].first->Insert(batch_ids[i], value_ptrs[i]);
+        if (s.ok()) {
+          // Insert Success
+          return s;
+        } else {
+          // Insert Failed, key already exist
+          value_ptrs[i]->Destroy(kvs_[0].second);
+          delete value_ptrs[i];
+          s = kvs_[0].first->Lookup(batch_ids[i], value_ptrs[i]);
+          return s;
+        }
+      }
+    }
+    for(int j = 0; j < true_size; ++j){
+        value_ptrs[j]->UpdateTest();
+    }
+    true_size = dl.sample(batch_ids, batch_size);
+  }
+  shutdown_ = true;
+  
+}
+
+void SSDKVConcurrentTest(int total_size, int batch_size){
+  mutex mu_;
+  condition_variable shutdown_cv_;
+  bool shutdown_ GUARDED_BY(mu_) = false;
+  std::vector<std::pair<KVInterface<K, V>*, Allocator*>> kvs_;
+  kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
+  kvs_.push_back(std::make_pair(new SSDKV<K, V>("/tmp/ssd_ut1"), ev_allocator()));
+  kvs_[1]->SetTotalDims(128);
+  ASSERT_EQ(kvs_[1]->Size(), 0);
+  cache_ = new LRUCache<K>();
+  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
+  auto t1 = std::thread(UpdateValuePtrAdd, kvs_, dl, batch_size, mu_, shutdown_, shutdown_cv_);
+  // auto t2 = std::thread(UpdateValuePtrAdd, kvs_, dl, batch_size, mu_, shutdown_, shutdown_cv_);
+  auto t3 = std::thread(BatchEviction, kvs_, dl.ids, batch_size, 30000, mu_. shutdown_, shutdown_cv_);
+  t1.join();
+  // t2.join();
+  t3.join();
+  delete hashmap;
+}
+
+TEST(KVInterfaceTest, TestLargeConcurrentSSDKV) {
+  std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
+  std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
+  for (int total_size : total_size_list) {
+    for (int batch_size : batch_size_list) {
+      LOG(INFO) << "SSD total_size: " << total_size << ", batch_size: " << batch_size;
+      for(int e = 0; e < 5; e++){
+        LOG(INFO) << "epoch: " << e;
+        SSDKVConcurrentTest(total_size, batch_size);
+      }
+      
+    }
+  }
+}
+
 
 } // namespace
 } // namespace embedding

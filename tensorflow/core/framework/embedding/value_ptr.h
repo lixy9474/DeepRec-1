@@ -289,6 +289,10 @@ class ValuePtr {
     LOG(FATAL) << "Unsupport SetValue in subclass of ValuePtrBase";
   }
 
+  virtual void UpdateTest(size_t size){
+    LOG(FATAL) << "Unsupport UpdateTest in subclass of ValuePtrBase";
+  }
+
  protected:
   void* ptr_;
   std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
@@ -454,6 +458,21 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
     SetFreq(int64(val));
     for(int i = 0; i < size; ++i) {
       *((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) = val;
+    }
+  }
+
+  void UpdateTest(size_t size){
+    for (size_t i = 0; i < 50; i++)
+    {
+      for(int i = 0; i < size; ++i) {
+        *((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) += 1;
+      }
+    }
+    for (size_t i = 0; i < 50; i++)
+    {
+      for(int i = 0; i < size; ++i) {
+        *((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) -= 1;
+      }
     }
   }
 };
