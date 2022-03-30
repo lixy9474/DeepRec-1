@@ -30,6 +30,7 @@
 
 #include <sys/resource.h>
 #include "tensorflow/core/framework/embedding/kv_interface.h"
+#include "tensorflow/core/framework/embedding/cache.h"
 #include "tensorflow/core/kernels/kv_variable_ops.h"
 #ifdef TENSORFLOW_USE_JEMALLOC
 #include "jemalloc/jemalloc.h"
@@ -1301,7 +1302,7 @@ TEST(KVInterfaceTest, TestLargeSingleSSDKV) {
 }
 */
 
-void BatchEviction(KVInterface<int64, float>* hashmap, std::vector<int64> keys, int batch_size, size_t cache_capacity_, mutex& mu_, condition_variable& shutdown_cv_, bool& shutdown_) {
+void BatchEviction(std::vector<std::pair<KVInterface<int64, float>*, Allocator*>>& kvs_, embedding::BatchCache<K>* cache_, int batch_size, size_t cache_capacity_, mutex& mu_, condition_variable& shutdown_cv_, bool& shutdown_) {
   // Env* env = Env::Default();
   const int kSize = 1000;
   // if (cache_capacity_ == -1) {
@@ -1342,7 +1343,7 @@ void BatchEviction(KVInterface<int64, float>* hashmap, std::vector<int64> keys, 
 }
 
 
-void UpdateValuePtrAdd(std::vector<std::pair<KVInterface<K, V>*, Allocator*>>& kvs_, BatchCache<K>* cache_, DataLoader& dl, int batch_size, mutex& mu_, condition_variable& shutdown_cv_, bool& shutdown_) {
+void UpdateValuePtrAdd(std::vector<std::pair<KVInterface<int64, float>*, Allocator*>>& kvs_, embedding::BatchCache<K>* cache_, DataLoader& dl, int batch_size, mutex& mu_, condition_variable& shutdown_cv_, bool& shutdown_) {
   mutex_lock l(mu_);
   std::vector<ValuePtr<float>*> value_ptrs(nullptr, batch_size);
   int64 *batch_ids = new int64[batch_size];
@@ -1353,7 +1354,7 @@ void UpdateValuePtrAdd(std::vector<std::pair<KVInterface<K, V>*, Allocator*>>& k
   while (true_size > 0){
       for (int i = 0; i < true_size; ++i){
         bool found = false;
-        for (; level < hash_table_count_; ++level) {
+        for (; level < 2; ++level) {
         Status s = kvs_[level].first->Lookup(batch_ids[i], &value_ptrs[i]);
         if (s.ok()) {
           found = true;
@@ -1361,7 +1362,7 @@ void UpdateValuePtrAdd(std::vector<std::pair<KVInterface<K, V>*, Allocator*>>& k
         }
       }
       if (!found) {
-        value_ptrs[i] = new NormalContiguousValuePtr<V>(ev_allocator(), 128);;
+        value_ptrs[i] = new NormalContiguousValuePtr<float>(ev_allocator(), 128);;
         value_ptrs[i]->SetValue(float(batch_ids[i]), 128);
       }
       if (level || !found) {
@@ -1391,20 +1392,21 @@ void SSDKVConcurrentTest(int total_size, int batch_size){
   mutex mu_;
   condition_variable shutdown_cv_;
   bool shutdown_ GUARDED_BY(mu_) = false;
-  std::vector<std::pair<KVInterface<K, V>*, Allocator*>> kvs_;
-  kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
-  kvs_.push_back(std::make_pair(new SSDKV<K, V>("/tmp/ssd_ut1"), ev_allocator()));
+  std::vector<std::pair<KVInterface<int64, float>*, Allocator*>> kvs_;
+  kvs_.push_back(std::make_pair(new LocklessHashMap<int64, float>(), ev_allocator()));
+  kvs_.push_back(std::make_pair(new SSDKV<int64, float>("/tmp/ssd_ut1"), ev_allocator()));
   kvs_[1]->SetTotalDims(128);
   ASSERT_EQ(kvs_[1]->Size(), 0);
-  cache_ = new LRUCache<K>();
+  embedding::BatchCache cache_ = new embedding::LRUCache<float>();
   DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
-  auto t1 = std::thread(UpdateValuePtrAdd, kvs_, dl, batch_size, mu_, shutdown_, shutdown_cv_);
+  auto t1 = std::thread(UpdateValuePtrAdd, kvs_, cache_, dl, batch_size, mu_, shutdown_, shutdown_cv_);
   // auto t2 = std::thread(UpdateValuePtrAdd, kvs_, dl, batch_size, mu_, shutdown_, shutdown_cv_);
-  auto t3 = std::thread(BatchEviction, kvs_, dl.ids, batch_size, 30000, mu_. shutdown_, shutdown_cv_);
+  auto t3 = std::thread(BatchEviction, kvs_, cache_, batch_size, 30000, mu_, shutdown_, shutdown_cv_);
   t1.join();
   // t2.join();
   t3.join();
-  delete hashmap;
+  // delete kvs_[0].first;
+  // delete kvs_[1].first;
 }
 
 TEST(KVInterfaceTest, TestLargeConcurrentSSDKV) {

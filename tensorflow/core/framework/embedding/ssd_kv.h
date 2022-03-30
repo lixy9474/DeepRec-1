@@ -50,7 +50,7 @@ class SSDKV : public KVInterface<K, V> {
     write_buffer = new char[buffer_size];
     unsigned int max_key_count = 1 + int(buffer_size / val_len);
     key_buffer = new K[max_key_count];
-    max_app_count = 10 * 1024 * 1024 / val_len;  // 10MB
+    max_app_count = 10 * 1024 * 1024 / val_len;  // 10MB TODO:
   }
 
   ~SSDKV() {
@@ -142,17 +142,19 @@ class SSDKV : public KVInterface<K, V> {
     spin_wr_lock l(mu);
     total_app_count += keys.size();
     for (int i = 0; i < keys.size(); i++) {
+      //====[
       if (buffer_cur * val_len + val_len > buffer_size) {
         emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
         emb_files[current_version].app_count += buffer_cur;
         if (emb_files[current_version].app_count >= max_app_count) {
           ++current_version;
           current_offset = 0;
-          emb_files.push_back(EmbFile(path_, current_version));
+          emb_files.push_back(EmbFile(path_, current_version));//EmbFile
         }
         TF_CHECK_OK(UpdateFlushStatus());
         buffer_cur = 0;
       }
+      //====]
       hash_map[keys[i]] = EmbPosition(current_offset, current_version,
                                       buffer_cur * val_len, false);
       current_offset += val_len;
@@ -231,6 +233,7 @@ class SSDKV : public KVInterface<K, V> {
 
  private:
   void SingleThreadDynamicCompaction() {
+    return;//策略
     spin_wr_lock l(mu);
     if (hash_map.size() * compaction_ration < total_app_count) {
       emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
@@ -280,6 +283,7 @@ class SSDKV : public KVInterface<K, V> {
   }
 
  private:
+ //局部性
   size_t val_len;
   char* write_buffer;
   K* key_buffer;
