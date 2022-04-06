@@ -207,7 +207,7 @@ class ValuePtr {
       }
       embnum++ ;
       int64 alloc_value_len = value_len;
-      V* tensor_val = (V*)allocator->AllocateRaw(0/*alignemnt unused*/, sizeof(V) * alloc_value_len);
+      V* tensor_val = (V*)allocator->AllocateRaw(0/*alignment unused*/, sizeof(V) * alloc_value_len);
       memcpy(tensor_val, default_v, sizeof(V) * value_len);
       ((V**)((int64*)ptr_ + meta->GetHeaderSize()))[emb_index]  = tensor_val;
 
@@ -223,7 +223,7 @@ class ValuePtr {
     }
   }
 
-  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int offset, int &need_initialize) {
+  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int offset, bool &need_initialize) {
 
   }
 
@@ -422,17 +422,12 @@ class NormalGPUValuePtr : public ValuePtr<V> {
  public:
   NormalGPUValuePtr(Allocator* allocator, size_t size) {
     this->ptr_ = (void*) malloc(sizeof(FixedLengthHeader) + sizeof(V *));
-    //V* tensor_val;
-    //cudaMalloc(&tensor_val, sizeof(V) * size);
-    //*(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) = tensor_val;
     alloc_ = allocator;
-    v_size = size;
-    *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) = TypedAllocator::Allocate<V>(allocator, size, AllocationAttributes());
+    *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) = (V*)allocator->AllocateRaw(0/*alignment unused*/, sizeof(V) * size);
     new ((char*)this->ptr_) FixedLengthHeader();
   }
 
   ~NormalGPUValuePtr() {
-    TypedAllocator::Deallocate(alloc_, *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)), v_size);
     free(this->ptr_);
   }
   
@@ -454,7 +449,7 @@ class NormalGPUValuePtr : public ValuePtr<V> {
     }
   }
 
-  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int offset, int &need_initialize) override {
+  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int offset, bool &need_initialize) override {
     int8 meta = *((int8*)((char*)this->ptr_ + 6));
     std::bitset<8> bs(meta);
     if (!bs.test(emb_index)) {
@@ -462,7 +457,6 @@ class NormalGPUValuePtr : public ValuePtr<V> {
       if (bs.test(emb_index))
         return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
       V* tensor_val = *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
-      cudaMemcpy(tensor_val, default_v, value_len * sizeof(V), cudaMemcpyDeviceToDevice);
       need_initialize = 1;
       int8* m = (int8*)((char*)this->ptr_ + 6);
       *m |= (1 <<  emb_index);
@@ -484,8 +478,8 @@ class NormalGPUValuePtr : public ValuePtr<V> {
     }
   }
 
-  virtual void Destroy(Allocator* allocator, int64 value_len) {
-    return;
+  virtual void Destroy(Allocator* allocator) {
+    alloc_->DeallocateRaw(*(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)));
   }
 
   int64 GetStep() {
@@ -511,9 +505,8 @@ class NormalGPUValuePtr : public ValuePtr<V> {
   void AddFreq(int64 count) {
     ((FixedLengthHeader*)this->ptr_)->AddFreq(count);
   }
-  public:
+  private:
     Allocator *alloc_;
-    int v_size;
 };
 
 }  // namespace tensorflow

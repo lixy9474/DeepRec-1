@@ -27,6 +27,8 @@
 #include "tensorflow/core/lib/strings/strcat.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/util/tensor_slice_reader_cache.h"
+#include "tensorflow/core/common_runtime/gpu/gpu_device.h"
+#include "tensorflow/core/common_runtime/gpu/gpu_process_state.h"
 
 #include <time.h>
 #include <sys/resource.h>
@@ -1097,6 +1099,7 @@ TEST(EmbeddingVariableTest,TestRemoveLocklessCPU) {
     LOG(INFO) << "2 size:" << hashmap->Size();
 }
 
+/*
 void CommitGPU(KVInterface<int64, float>* hashmap) {
   for (int64 i = 0; i< 100; ++i) {
     ValuePtr<float>* tmp= new NormalGPUValuePtr<float>(ev_allocator(), 100);
@@ -1160,7 +1163,7 @@ TEST(EmbeddingVariableTest, TestCommitValue) {
     //ASSERT_EQ(tmp[i], 10);
   }//
 }
-/*
+
 TEST(EmbeddingVariableTest, TestBatchCommitofLocklessHashMapCPU) {
   KVInterface<int64, float>* hashmap = new LocklessHashMapCPU<int64, float>();
   const int EmbeddingSize = 16;
@@ -1200,6 +1203,141 @@ TEST(EmbeddingVariableTest, TestBatchCommitofLocklessHashMapCPU) {
   }//compare value after BatchCommit
 }
 */
+
+const int total_size = 1024 * 8; 
+const int th_num = 1;
+const int malloc_size = total_size / th_num;
+
+void malloc_use_allocator(Allocator* allocator){
+  timespec start;
+  timespec end;
+  float* first = (float *)allocator->AllocateRaw(0, sizeof(float));
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (int i = 0; i < malloc_size; ++i) {
+    int ev_list_size = 32;
+    float* ptr_ = (float *)allocator->AllocateRaw(0, sizeof(float) * ev_list_size);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  LOG(INFO) << "cost time: " << ((double)(end.tv_sec - start.tv_sec)*1000000000 + end.tv_nsec - start.tv_nsec)/1000000 << "ms";
+}
+
+TEST(EmbeddingVariableTest, TestEVMalloc) {
+  std::thread th_arr[th_num];
+  for (unsigned int i = 0; i < th_num; ++i) {
+    th_arr[i] = std::thread(malloc_use_allocator, ev_allocator());
+  }
+  for (unsigned int i = 0; i < th_num; ++i) {
+    th_arr[i].join();
+  }
+}
+
+TEST(EmbeddingVariableTest, TestCPUMalloc) {
+  std::thread th_arr[th_num];
+  for (unsigned int i = 0; i < th_num; ++i) {
+    th_arr[i] = std::thread(malloc_use_allocator, cpu_allocator());
+  }
+  for (unsigned int i = 0; i < th_num; ++i) {
+    th_arr[i].join();
+  }
+}
+
+TEST(EmbeddingVariableTest, TestGPUMalloc) {
+  SessionOptions sops;
+  std::unique_ptr<Device> device = DeviceFactory::NewDevice(DEVICE_GPU, sops, "/job:a/replica:0/task:0");
+  Allocator* gpu_allocator = GPUProcessState::singleton()->GetGPUAllocator(
+        GPUOptions(), TfGpuId(0), 1 << 26);
+
+  std::thread th_arr[th_num];
+  for (unsigned int i = 0; i < th_num; ++i) {
+    th_arr[i] = std::thread(malloc_use_allocator, gpu_allocator);
+  }
+  for (unsigned int i = 0; i < th_num; ++i) {
+    th_arr[i].join();
+  }
+}
+
+
+TEST(EmbeddingVariableTest, TestCPUGPUMalloc) {
+  SessionOptions sops;
+  std::unique_ptr<Device> device = DeviceFactory::NewDevice(DEVICE_GPU, sops, "/job:a/replica:0/task:0");
+
+  Allocator* gpu_allocator = GPUProcessState::singleton()->GetGPUAllocator(
+        GPUOptions(), TfGpuId(0), 1 << 26);
+
+  timespec start;
+  timespec end;
+
+  ValuePtr<float>* ptr_1 = new NormalGPUValuePtr<float>(gpu_allocator, 32);
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (int i = 0; i < 1024 * 2; ++i) {
+    int ev_list_size = 32;
+    ValuePtr<float>* ptr_ = new NormalGPUValuePtr<float>(gpu_allocator, ev_list_size);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  LOG(INFO) << "cost time: " << ((double)(end.tv_sec - start.tv_sec)*1000000000 + end.tv_nsec - start.tv_nsec)/1000000 << "ms";
+
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (int i = 0; i < 1024 * 2; ++i) {
+    int ev_list_size = 32;
+    ValuePtr<float>* ptr_ = new NormalValuePtr<float>(cpu_allocator(), ev_list_size);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  LOG(INFO) << "cost time: " << ((double)(end.tv_sec - start.tv_sec)*1000000000 + end.tv_nsec - start.tv_nsec)/1000000 << "ms";
+
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (int i = 0; i < 1; ++i) {
+    int ev_list_size = 32 * 1024 * 2;
+    ValuePtr<float>* ptr_ = new NormalGPUValuePtr<float>(gpu_allocator, ev_list_size);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  LOG(INFO) << "cost time: " << ((double)(end.tv_sec - start.tv_sec)*1000000000 + end.tv_nsec - start.tv_nsec)/1000000 << "ms";
+}
+
+void malloc_free_use_allocator(Allocator* allocator){
+  timespec start;
+  timespec end;
+  std::vector<float*> ptrs;
+  float* first = (float *)allocator->AllocateRaw(0, sizeof(float));
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (int i = 0; i < malloc_size; ++i) {
+    int ev_list_size = 32;
+    float* ptr_ = (float *)allocator->AllocateRaw(0, sizeof(float) * ev_list_size);
+    ptrs.push_back(ptr_);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  LOG(INFO) << "first time: " << ((double)(end.tv_sec - start.tv_sec)*1000000000 + end.tv_nsec - start.tv_nsec)/1000000 << "ms";
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (auto iter = ptrs.begin();iter != ptrs.end();iter++) {
+    allocator->DeallocateRaw(*iter);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  LOG(INFO) << "free time: " << ((double)(end.tv_sec - start.tv_sec)*1000000000 + end.tv_nsec - start.tv_nsec)/1000000 << "ms";
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (int i = 0; i < malloc_size; ++i) {
+    int ev_list_size = 32;
+    float* ptr_ = (float *)allocator->AllocateRaw(0, sizeof(float) * ev_list_size);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  LOG(INFO) << "second time: " << ((double)(end.tv_sec - start.tv_sec)*1000000000 + end.tv_nsec - start.tv_nsec)/1000000 << "ms";
+}
+
+TEST(EmbeddingVariableTest, TestEVMallocFree) {
+  std::thread th_arr[th_num];
+  for (unsigned int i = 0; i < th_num; ++i) {
+    th_arr[i] = std::thread(malloc_free_use_allocator, ev_allocator());
+  }
+  for (unsigned int i = 0; i < th_num; ++i) {
+    th_arr[i].join();
+  }
+}
+
 
 
 } // namespace

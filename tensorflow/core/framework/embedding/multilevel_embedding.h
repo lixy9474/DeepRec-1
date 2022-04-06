@@ -66,7 +66,7 @@ class StorageManager {
     delete cache_;
   }
 
-  Status Init() {
+  Status Init(Allocator* alloc_ = nullptr) {
     switch (sc_.layout_type) {
       case LayoutType::NORMAL:
         new_value_ptr_fn_ = [] (Allocator* alloc, size_t size) { return new NormalValuePtr<V>(alloc, size); };
@@ -112,8 +112,7 @@ class StorageManager {
         kvs_.push_back(std::make_pair(new LevelDBKV<K, V>(sc_.path), ev_allocator()));
         break;
       case StorageType::HBM_DRAM:
-        //new_value_ptr_fn_ = [] (size_t size) { return new NormalGPUValuePtr<V>(size); };
-        new_value_ptr_fn_2 = [] (Allocator* allocator, size_t size) { return new NormalGPUValuePtr<V>(allocator, size); };
+        new_value_ptr_fn_ = [] (Allocator* allocator, size_t size) { return new NormalGPUValuePtr<V>(allocator, size); };
         LOG(INFO) << "StorageManager::HBM_DRAM: " << name_;
         kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), alloc_));
         kvs_.push_back(std::make_pair(new LocklessHashMapCPU<K, V>(), alloc_));
@@ -226,12 +225,7 @@ class StorageManager {
       }
     }
     if (!found) {
-      if(sc_.type == StorageType::HBM_DRAM){
-        *value_ptr = new_value_ptr_fn_2(alloc_, size);//TODO
-      }
-      else{
-        *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
-      }
+      *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
     }
     if (level || !found) {
       Status s = kvs_[0].first->Insert(key, *value_ptr);
@@ -452,14 +446,12 @@ class StorageManager {
       }
     }
   }
- public:
-  Allocator* alloc_;
+
  private:
   int32 hash_table_count_;
   std::string name_;
   std::vector<std::pair<KVInterface<K, V>*, Allocator*>> kvs_;
   std::function<ValuePtr<V>*(Allocator*, size_t)> new_value_ptr_fn_;
-  std::function<ValuePtr<V>*(Allocator*, size_t)> new_value_ptr_fn_2;
   StorageConfig sc_;
   bool is_multi_level_;
 

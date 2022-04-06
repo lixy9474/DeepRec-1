@@ -76,11 +76,11 @@ class EmbeddingVar : public ResourceBase {
       if(embedding::StorageType::HBM_DRAM == storage_manager_->GetStorageType()){
         emb_config_.default_value_dim = default_value_dim;
         value_len_ = default_tensor.NumElements() / emb_config_.default_value_dim;
-
-        storage_manager_->alloc_ = alloc_;
-
-        cudaMalloc(&default_value_, default_tensor.NumElements() * sizeof(V));
+        default_value_ = TypedAllocator::Allocate<V>(alloc_, default_tensor.NumElements(), AllocationAttributes());
         auto default_tensor_flat = default_tensor.flat<V>();
+        dev_init_default_address = nullptr;
+        dev_init_value_address = nullptr;
+        dev_value_address = nullptr;
         cudaMemcpy(default_value_, &default_tensor_flat(0), default_tensor.TotalBytes(), cudaMemcpyHostToDevice);
       }else{
         alloc_ = ev_allocator();
@@ -144,16 +144,21 @@ class EmbeddingVar : public ResourceBase {
     filter_->LookupOrCreateWithFreq(key, val, default_value_ptr);
   }
 
-  void LookupOrCreateWithFreqGPU(K key, V* val, V* default_v)  {
-    const V* default_value_ptr = (default_v == nullptr) ? default_value_ : default_v;
-    filter_->LookupOrCreateWithFreqGPU(key, val, default_value_ptr);
+  void LookupWithFreqBatch(K* keys, bool *init_flags, V** memcpy_address, int start, int limit){
+    ValuePtr<V>* value_ptr = nullptr;
+    for(int i = 0; i < limit - start; i++){
+      TF_CHECK_OK(LookupOrCreateKey(keys[i], &value_ptr));
+      init_flags[i + start] = 0;
+      memcpy_address[i + start] = LookupOrCreateEmb(value_ptr, init_flags[i + start]);
+      value_ptr->AddFreq();
+    }
   }
-
-  void LookupOrCreateWithFreqGPUBatch(K* keys, V* val_base, V** default_values, int64 size, int64 slice_elems)  {
+  
+  void CreateGPUBatch(V* val_base, V** default_values, int64 size, int64 slice_elems, bool* init_flags, V** memcpy_address){
     for(int i = 0;i < size;i++){
       default_values[i] = (default_values[i] == nullptr) ? default_value_ : default_values[i];
     }
-    filter_->LookupOrCreateWithFreqGPUBatch(keys, val_base, default_values, size, slice_elems, value_len_);
+    filter_->CreateGPUBatch(val_base, default_values, size, slice_elems, value_len_, init_flags, memcpy_address);
   }
 
   void LookupOrCreate(K key, V* val, V* default_v, int64 count)  {
@@ -166,8 +171,8 @@ class EmbeddingVar : public ResourceBase {
         emb_config_.emb_index, storage_manager_->GetOffset(emb_config_.emb_index));
   }
 
-  V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, const V* default_v,int &need_initialize) {
-    return value_ptr->GetOrAllocate(alloc_, value_len_, default_v,
+  V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, bool &need_initialize) {
+    return value_ptr->GetOrAllocate(alloc_, value_len_, nullptr,
         emb_config_.emb_index, storage_manager_->GetOffset(emb_config_.emb_index), need_initialize);
   }
 
@@ -285,6 +290,13 @@ class EmbeddingVar : public ResourceBase {
     return storage_manager_->Cache();
   }
 
+  Allocator* GetAllocator() {
+    return alloc_;
+  }
+ 
+ public:
+  V **dev_value_address, **dev_init_value_address, **dev_init_default_address;
+
  private:
   std::string name_;
   bool is_initialized_ = false;
@@ -304,11 +316,12 @@ class EmbeddingVar : public ResourceBase {
       Destroy();
       delete storage_manager_;
     }
-    if(embedding::StorageType::HBM_DRAM == storage_manager_->GetStorageType()){
-        cudaFree(default_value_);
-      }else{
-        TypedAllocator::Deallocate(alloc_, default_value_, value_len_);
-      }
+    if(dev_init_default_address != nullptr && alloc_ != nullptr){
+      alloc_->DeallocateRaw(dev_init_value_address);
+      alloc_->DeallocateRaw(dev_init_default_address);
+      alloc_->DeallocateRaw(dev_value_address);
+    }
+    TypedAllocator::Deallocate(alloc_, default_value_, value_len_);
   }
   TF_DISALLOW_COPY_AND_ASSIGN(EmbeddingVar);
 };

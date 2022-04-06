@@ -25,6 +25,9 @@ limitations under the License.
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/types.h"
 
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+
 namespace tensorflow {
 
 // If true, ev allocator collects more stats.
@@ -179,7 +182,8 @@ class Chunk {
   Chunk(size_t chunk_size, size_t slot_size, Bin* bin, PageMap* pm) :
       chunk_size_(chunk_size), slot_size_(slot_size) {
     slot_count_ = chunk_size_ / slot_size_;
-    start_ = (char*)port::AlignedMalloc(chunk_size_, kPageSize);
+    //start_ = (char*)port::AlignedMalloc(chunk_size_, kPageSize);
+    cudaMalloc(&start_, chunk_size_);
     if (start_ == nullptr) {
       LOG(FATAL) << "OOM, can't create new Chunk for EVAllocator,"
                  << "please check free memory.";
@@ -190,7 +194,8 @@ class Chunk {
   }
 
   ~Chunk() {
-    delete start_;
+    cudaFree(start_);
+    //delete start_;
   }
 
   void* Allocate() {
@@ -434,10 +439,11 @@ class EVAllocator : public Allocator {
                    << "% of system memory.";
     }
 
-    alignment = 8;
-    void* p = port::AlignedMalloc(num_bytes, alignment);
+    // support 4B no fragment allocation.
+    alignment = (num_bytes <= 4) ? 4 : 8;
+    void* p = impl_.Allocate(num_bytes);
     if (ev_allocator_collect_stats) {
-      const std::size_t alloc_size = port::MallocExtension_GetAllocatedSize(p);
+      const std::size_t alloc_size = impl_.AllocatedSize(p);
       mutex_lock l(mu_);
       ++stats_.num_allocs;
       stats_.bytes_in_use += alloc_size;
@@ -457,7 +463,6 @@ class EVAllocator : public Allocator {
     return p;
   }
 
-  /*
   size_t BatchAllocateRaw(size_t num, size_t alignment,
       size_t num_bytes, void** ret) override {
     if (num_bytes > LargeAllocationWarningBytes() &&
@@ -495,18 +500,17 @@ class EVAllocator : public Allocator {
       }
     }
     return allocated_num;
-  }*/
+  }
 
   void DeallocateRaw(void* ptr) override {
     if (ev_allocator_collect_stats) {
-      const std::size_t alloc_size =
-          port::MallocExtension_GetAllocatedSize(ptr);
+      const std::size_t alloc_size = impl_.AllocatedSize(ptr);
       
       mutex_lock l(mu_);
       stats_.bytes_in_use -= alloc_size;
     }
 
-    port::AlignedFree(ptr);
+    impl_.Deallocate(ptr);
   }
 
   absl::optional<AllocatorStats> GetStats() override {
@@ -522,7 +526,7 @@ class EVAllocator : public Allocator {
   }
 
   size_t AllocatedSizeSlow(const void* ptr) const override {
-    return port::MallocExtension_GetAllocatedSize(ptr);
+    return impl_.AllocatedSize(ptr);
   }
 
  private:
@@ -533,6 +537,8 @@ class EVAllocator : public Allocator {
   // statistics are disabled.
   std::atomic<int> single_allocation_warning_count_;
   int total_allocation_warning_count_ GUARDED_BY(mu_);
+
+  EVAllocatorImpl impl_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(EVAllocator);
 };

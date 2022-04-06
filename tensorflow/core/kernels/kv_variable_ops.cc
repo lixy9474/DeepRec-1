@@ -233,7 +233,13 @@ class InitializeKvVariableOp : public OpKernel {
                                                                storage_path_,
                                                                storage_size_,
                                                                layout_));
-              TF_CHECK_OK(storage_manager->Init());
+              if(storage_type_ == embedding::HBM_DRAM){
+                TF_CHECK_OK(storage_manager->Init(ev_allocator()));
+              }
+              else{
+                TF_CHECK_OK(storage_manager->Init());
+              }                                                 
+              
               *ptr = new EmbeddingVar<TKey, TValue>(handle_self.name(),
                          storage_manager,
                          EmbeddingConfig(emb_index_ + block_num_ * slot_index_, emb_index_,
@@ -242,7 +248,7 @@ class InitializeKvVariableOp : public OpKernel {
                                          l2_weight_threshold_, layout_,
                                          max_element_size_, false_positive_probability_,
                                          counter_type_, default_value_dim_),
-                                         context->device()->GetAllocator({}));
+                                         ev_allocator());
             return Status::OK();
             }));
       ev->Init(default_values, default_value_dim_);
@@ -260,7 +266,12 @@ class InitializeKvVariableOp : public OpKernel {
                                                                  storage_path_,
                                                                  storage_size_,
                                                                  layout_));
-             TF_CHECK_OK(storage_manager->Init());
+              if(storage_type_ == embedding::HBM_DRAM){
+                TF_CHECK_OK(storage_manager->Init(ev_allocator()));
+              }
+              else{
+                TF_CHECK_OK(storage_manager->Init());
+              }
              *ptr = new EmbeddingVar<TKey, TValue>(handle_primary.name(),
                         storage_manager,
                         EmbeddingConfig(primary_emb_index + block_num_ * primary_slot_index, primary_emb_index,
@@ -269,7 +280,7 @@ class InitializeKvVariableOp : public OpKernel {
                                         l2_weight_threshold_, layout_,
                                         max_element_size_, false_positive_probability_,
                                         counter_type_),
-                                        context->device()->GetAllocator({}));
+                                        ev_allocator());
             // default_values is slot value, should not to initialize primary value
             return Status::OK();
            }));
@@ -288,7 +299,7 @@ class InitializeKvVariableOp : public OpKernel {
                                          max_freq_, l2_weight_threshold_,
                                          layout_, max_element_size_, false_positive_probability_,
                                          counter_type_, default_value_dim_),
-                                         context->device()->GetAllocator({}));
+                                         ev_allocator());
              return (*ptr)->Init(default_values, default_value_dim_);
             }));
       core::ScopedUnref unref_me(primary_variable);
@@ -420,8 +431,8 @@ class KvResourceGatherOp : public OpKernel {
     std::function<void(TKey, TValue*, TValue*)> lookup_or_create_fn;
     std::function<void(TKey*, TValue*, TValue**, int64, int64)> lookup_or_create_fn_batch;
     if(ev->IsHBMDRAM()){
-      lookup_or_create_fn_batch = [ev] (TKey* indexs, TValue* out_base, TValue** default_vs, int64 size, int64 slice_elems){
-                                  ev->LookupOrCreateWithFreqGPUBatch(indexs, out_base, default_vs, size, slice_elems);};
+      //lookup_or_create_fn_batch = [ev] (TKey* indexs, TValue* out_base, TValue** default_vs, int64 size, int64 slice_elems){
+      //                            ev->LookupOrCreateWithFreqGPUBatch(indexs, out_base, default_vs, size, slice_elems);};
     }
     else if (ev->IsMultiLevel()) {
       lookup_or_create_fn = [ev] (TKey index, TValue* out, TValue* default_v){
@@ -462,19 +473,24 @@ class KvResourceGatherOp : public OpKernel {
             slice_bytes, do_work);
       } else {
         if(ev->IsHBMDRAM()){
+          timespec start, end, part_start, part_end;
+          clock_gettime(CLOCK_MONOTONIC, &start);
+          clock_gettime(CLOCK_MONOTONIC, &part_start);
+          bool* init_flags = new bool[indices_size];
+          TValue** memcpy_address = new TValue*[indices_size];
+          TValue** default_values = new TValue*[indices_size];
           auto do_work = [this, indices_flat,
-              out_base, slice_elems, c, ev, lookup_or_create_fn_batch] (int64 start, int64 limit) {
+              out_base, slice_elems, c, ev, lookup_or_create_fn_batch, 
+              default_values, init_flags, memcpy_address] (int64 start, int64 limit) {
             std::vector<TKey> ids;
-            std::vector<TValue*> default_values;
             for (int64 i = start; i < limit; ++i) {
               TValue* default_v;
               default_v = ev->GetDefaultValuePtr() +
                             ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
-              default_values.push_back(default_v);
+              default_values[i] = default_v;
               ids.push_back(indices_flat(i));
             }
-            lookup_or_create_fn_batch(ids.data(),
-                  out_base + start * slice_elems, default_values.data(), limit - start, slice_elems);
+            ev->LookupWithFreqBatch(ids.data(), init_flags, memcpy_address, start, limit);
             ev->storage_manager()->Schedule([ev, ids]() {
               embedding::BatchCache<TKey>* cache = ev->Cache();
               if (cache) {
@@ -484,10 +500,21 @@ class KvResourceGatherOp : public OpKernel {
           };
 
           auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
-          Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
+          Shard(8, worker_threads->workers, indices_size,
               slice_bytes, do_work);
+          clock_gettime(CLOCK_MONOTONIC, &part_end);
+          LOG(INFO) << "Lookup time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";  
+          clock_gettime(CLOCK_MONOTONIC, &part_start);
+          ev->CreateGPUBatch(out_base, default_values, indices_size, slice_elems, init_flags, memcpy_address);
+          clock_gettime(CLOCK_MONOTONIC, &part_end);
+          LOG(INFO) << "Memcpy time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
+
+          clock_gettime(CLOCK_MONOTONIC, &end);
+          LOG(INFO) << "Total time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
         }
         else{
+          timespec start,end;
+          clock_gettime(CLOCK_MONOTONIC, &start);
           auto do_work = [this, indices_flat,
               out_base, slice_elems, c, ev, lookup_or_create_fn] (int64 start, int64 limit) {
             std::vector<TKey> ids;
@@ -495,8 +522,6 @@ class KvResourceGatherOp : public OpKernel {
               TValue* default_v;
               default_v = ev->GetDefaultValuePtr() +
                             ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
-              /*ev->LookupOrCreate(indices_flat(i),
-                  out_base + i * slice_elems, default_v);*/
               lookup_or_create_fn(indices_flat(i),
                   out_base + i * slice_elems, default_v);
               ids.push_back(indices_flat(i));
@@ -511,8 +536,10 @@ class KvResourceGatherOp : public OpKernel {
           };
 
           auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
-          Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
+          Shard(8, worker_threads->workers, indices_size,
               slice_bytes, do_work);
+          clock_gettime(CLOCK_MONOTONIC, &end);
+          std::cout << "time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms" << std::endl;
           }//ev->isHBMDRAM();
       }
     }

@@ -18,6 +18,7 @@ limitations under the License.
 namespace tensorflow {
 
 template<class V>
+/*
 __global__ void BatchInit(V** val, V** default_value, int value_len, int limit) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
   if(i < limit){
@@ -26,15 +27,15 @@ __global__ void BatchInit(V** val, V** default_value, int value_len, int limit) 
     }
   }
 }
+*/
 
-/*
 __global__ void BatchInit(V** val, V** default_value, int value_len, int limit) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
   if(i / value_len < limit){
     *(val[i / value_len] + i % value_len) = *(default_value[i / value_len] + i % value_len);
   }
 }
-*/
+
 
 template __global__ void BatchInit<int>(int**, int**, int, int);
 template __global__ void BatchInit<float>(float**, float**, int, int);
@@ -42,6 +43,7 @@ template __global__ void BatchInit<double>(double**, double**, int, int);
 template __global__ void BatchInit<long long>(long long**, long long**, int, int);
 
 template<class V>
+/*
 __global__ void BatchCopy(V** batch, V* val_base, int value_len, int limit) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
   if(i < limit){
@@ -50,6 +52,15 @@ __global__ void BatchCopy(V** batch, V* val_base, int value_len, int limit) {
     }
   }
 }
+*/
+
+__global__ void BatchCopy(V** batch, V* val_base, int value_len, int limit) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  if(i / value_len < limit){  
+    val_base[i] = *(batch[i / value_len] + i % value_len);
+  }
+}
+
 
 template __global__ void BatchCopy<int>(int**, int*, int, int);
 template __global__ void BatchCopy<float>(float**, float*, int, int);
