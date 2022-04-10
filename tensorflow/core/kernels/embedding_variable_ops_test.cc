@@ -1377,6 +1377,7 @@ void TestLargeConcurrent(embedding::StorageManager<int64, float>* storage_manage
       tmp->PrintValue(128);
       LOG(INFO) << "ori_tmp->SetValue(float(keys[i]), 128)";
       ori_tmp->PrintValue(128);
+      break;
     }
     delete ori_tmp;
   }

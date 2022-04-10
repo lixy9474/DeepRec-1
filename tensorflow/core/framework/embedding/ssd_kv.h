@@ -33,6 +33,7 @@ class SSDKV : public KVInterface<K, V> {
     current_offset = 0;
     buffer_size = 4 * 1024;  // Write 4MB at once.
     buffer_cur = 0;
+    open_file_count = 24;
     emb_files.push_back(EmbFile(path_, current_version));
 
     counter_ = new SizeCounter<K>(8);
@@ -55,7 +56,7 @@ class SSDKV : public KVInterface<K, V> {
 
   ~SSDKV() {
     if (buffer_cur > 0) {
-      emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
+      emb_files[current_version].Write(write_buffer, buffer_cur * val_len);
       TF_CHECK_OK(UpdateFlushStatus());
       buffer_cur = 0;
     }
@@ -89,8 +90,7 @@ class SSDKV : public KVInterface<K, V> {
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
       EmbPosition posi = iter->second;
       if (posi.flushed) {
-        emb_files[posi.version].fs.seekg(posi.offset, std::ios::beg);
-        emb_files[posi.version].fs.read((char*)(val->GetPtr()), val_len);
+        emb_files[posi.version].Read((char*)(val->GetPtr()), val_len, posi.offset);
       } else {
         memcpy((char*)val->GetPtr(), write_buffer + posi.buffer_offset,
                val_len);
@@ -161,8 +161,7 @@ class SSDKV : public KVInterface<K, V> {
       EmbPosition posi = it.second;
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
       if (posi.flushed) {
-        emb_files[posi.version].fs.seekg(posi.offset, std::ios::beg);
-        emb_files[posi.version].fs.read((char*)(val->GetPtr()), val_len);
+        emb_files[posi.version].Read((char*)(val->GetPtr()), val_len, posi.offset);
       } else {
         memcpy((char*)val->GetPtr(), write_buffer + posi.buffer_offset,
                val_len);
@@ -184,11 +183,14 @@ class SSDKV : public KVInterface<K, V> {
  private:
   void CheckBuffer() {
     if (buffer_cur * val_len + val_len > buffer_size) {
-      emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
+      emb_files[current_version].Write(write_buffer, buffer_cur * val_len);
       emb_files[current_version].app_count += buffer_cur;
       if (emb_files[current_version].app_count >= max_app_count) {
         ++current_version;
         current_offset = 0;
+        if (current_version >= open_file_count) {
+          emb_files[current_version - open_file_count].fs.close();
+        }
         emb_files.push_back(EmbFile(path_, current_version));
       }
       TF_CHECK_OK(UpdateFlushStatus());
@@ -210,7 +212,7 @@ class SSDKV : public KVInterface<K, V> {
     // return; // 策略
     spin_wr_lock l(mu);
     if (hash_map.size() * compaction_ration < total_app_count) {
-      emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
+      emb_files[current_version].Write(write_buffer, buffer_cur * val_len);
       emb_files[current_version].app_count += buffer_cur;
       TF_CHECK_OK(UpdateFlushStatus());
       size_t save_version = current_version;
@@ -226,8 +228,7 @@ class SSDKV : public KVInterface<K, V> {
           LOG(INFO) << "BUG!!!!!!!";
           posi.Print();
         }
-        emb_files[posi.version].fs.seekg(posi.offset, std::ios::beg);
-        emb_files[posi.version].fs.read((char*)(val->GetPtr()), val_len);
+        emb_files[posi.version].Read((char*)(val->GetPtr()), val_len, posi.offset);
         CheckBuffer();
         SaveKV(it.first, val);
       }
@@ -239,7 +240,7 @@ class SSDKV : public KVInterface<K, V> {
   }
 
  private:
- //局部性
+  //局部性
   size_t val_len;
   char* write_buffer;
   K* key_buffer;
@@ -250,6 +251,7 @@ class SSDKV : public KVInterface<K, V> {
   std::string path_;
   std::function<ValuePtr<V>*(size_t)> new_value_ptr_fn_;
   int total_dims_;
+  int16 open_file_count; // 最多同时保持常驻打开的文件数量
 
   mutable easy_spinrwlock_t mu = EASY_SPINRWLOCK_INITIALIZER;
   class EmbPosition {
@@ -271,20 +273,43 @@ class SSDKV : public KVInterface<K, V> {
   };
   struct EmbFile {
     std::fstream fs;
-    bool active;
     size_t app_count;
     size_t version;
     std::string filepath;
+
     EmbFile(std::string path_, size_t ver) {
       version = ver;
       std::stringstream ss;
       ss << std::setw(4) << std::setfill('0') << ver << ".emb";
       filepath = path_ + ss.str();
-      fs = std::fstream(filepath, std::ios::app | std::ios::in | std::ios::out |
-                                      std::ios::binary);
-      active = true;
+      fs.open(filepath,
+              std::ios::app | std::ios::in | std::ios::out | std::ios::binary);
       CHECK(fs.good());
       app_count = 0;
+    }
+
+    void Write(const char* val, const size_t val_len) {
+      if (fs.is_open()) {
+        fs.write(val, val_len);
+      } else {
+        fs.open(filepath, std::ios::app | std::ios::in | std::ios::out |
+                              std::ios::binary);
+        fs.write(val, val_len);
+        fs.close();
+      }
+    }
+
+    void Read(char* val, const size_t val_len, const size_t offset) {
+      if (fs.is_open()) {
+        fs.seekg(offset, std::ios::beg);
+        fs.read(val, val_len);
+      } else {
+        fs.open(filepath, std::ios::app | std::ios::in | std::ios::out |
+                              std::ios::binary);
+        fs.seekg(offset, std::ios::beg);
+        fs.read(val, val_len);
+        fs.close();
+      }
     }
   };
   float compaction_ration;
