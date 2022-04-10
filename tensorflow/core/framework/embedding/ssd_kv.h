@@ -233,7 +233,7 @@ class SSDKV : public KVInterface<K, V> {
 
  private:
   void SingleThreadDynamicCompaction() {
-    return;//策略
+    // return; // 策略
     spin_wr_lock l(mu);
     if (hash_map.size() * compaction_ration < total_app_count) {
       emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);

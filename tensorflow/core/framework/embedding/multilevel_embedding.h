@@ -134,7 +134,7 @@ class StorageManager {
 
     hash_table_count_ = kvs_.size();
     if (hash_table_count_ > 1) {
-      cache_ = new LRUCache<K>();
+      cache_ = new LFUCache<K>();
       eviction_thread_ = Env::Default()->StartThread(ThreadOptions(), "EV_Eviction",
                                                      [this]() { BatchEviction(); });
       thread_pool_.reset(new thread::ThreadPool(Env::Default(), ThreadOptions(),
@@ -221,7 +221,8 @@ class StorageManager {
     bool found = false;
     int level = 0;
     if (cache_){
-      cache_->add_to_rank(&key, 1);
+      cache_->Visit();
+      // cache_->add_to_rank(&key, 1);
     }
     
     for (; level < hash_table_count_; ++level) {
@@ -230,6 +231,9 @@ class StorageManager {
         found = true;
         break;
       }
+    }
+    if (level == 0 && found && cache_) {
+      cache_->Hit();
     }
     if (!found) {
       *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
@@ -262,12 +266,13 @@ class StorageManager {
     for (auto kv : kvs_) {
       total_size += kv.first->Size();
     }
-    LOG(INFO) << "kvs_[0].first->Size() = " << kvs_[0].first->Size();
-    if(kvs_.size()==2){
-      LOG(INFO) << "kvs_[1].first->Size() = " << kvs_[1].first->Size();
-    }
-    
     return total_size;
+  }
+
+  void PrintTestInfo() {
+    if (hash_table_count_ == 2 && cache_) {
+      LOG(INFO) << "kvs_[0]-Size() = " << kvs_[0].first->Size() << ", kvs_[1]-Size() = " << kvs_[1].first->Size() << ", " << cache_->HitRateStr() << ", cache_count = " << cache_->size();
+    }
   }
 
   Status GetSnapshot(std::vector<K>* key_list,
@@ -425,7 +430,6 @@ class StorageManager {
         mutex_lock l(mu_);
         if (done_) {
           break;
-          LOG(INFO) << "411";
         }
       }
     }
@@ -435,17 +439,17 @@ class StorageManager {
       if (shutdown_) {
         break;
       }
-      LOG(INFO) << "421";
       const int kTimeoutMilliseconds = 10 * 1;
       WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
 
       int cache_count = cache_->size();
-      LOG(INFO) << cache_count;
+      // LOG(INFO) << "cache_count = " << cache_count;
       if (cache_count > cache_capacity_) {
         // eviction
         int k_size = cache_count - cache_capacity_;
         k_size = std::min(k_size, kSize);
         size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
+        // LOG(INFO) << "evic_true_size = " << true_size;
         ValuePtr<V>* value_ptr;
         for (int64 i = 0; i < true_size; ++i) {
           if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
