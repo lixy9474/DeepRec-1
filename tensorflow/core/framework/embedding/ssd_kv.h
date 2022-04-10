@@ -50,7 +50,7 @@ class SSDKV : public KVInterface<K, V> {
     write_buffer = new char[buffer_size];
     unsigned int max_key_count = 1 + int(buffer_size / val_len);
     key_buffer = new K[max_key_count];
-    max_app_count = 10 * 1024 * 1024 / val_len;  // 10MB TODO:
+    max_app_count = (10 << 20) / val_len;  // 10MB
   }
 
   ~SSDKV() {
@@ -105,24 +105,8 @@ class SSDKV : public KVInterface<K, V> {
     spin_wr_lock l(mu);
     auto iter = hash_map.find(key);
     if (iter == hash_map.end()) {
-      if (buffer_cur * val_len + val_len > buffer_size) {
-        emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
-        emb_files[current_version].app_count += buffer_cur;
-        if (emb_files[current_version].app_count >= max_app_count) {
-          ++current_version;
-          current_offset = 0;
-          emb_files.push_back(EmbFile(path_, current_version));
-        }
-        TF_CHECK_OK(UpdateFlushStatus());
-        buffer_cur = 0;
-      }
-      hash_map[key] = EmbPosition(current_offset, current_version,
-                                  buffer_cur * val_len, false);
-      current_offset += val_len;
-      memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
-             val_len);
-      key_buffer[buffer_cur] = key;
-      ++buffer_cur;
+      CheckBuffer();
+      SaveKV(key, value_ptr);
       counter_->add(key, 1);
       total_app_count++;
       return Status::OK();
@@ -142,26 +126,8 @@ class SSDKV : public KVInterface<K, V> {
     spin_wr_lock l(mu);
     total_app_count += keys.size();
     for (int i = 0; i < keys.size(); i++) {
-      //====[
-      if (buffer_cur * val_len + val_len > buffer_size) {
-        emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
-        emb_files[current_version].app_count += buffer_cur;
-        if (emb_files[current_version].app_count >= max_app_count) {
-          ++current_version;
-          current_offset = 0;
-          emb_files.push_back(EmbFile(path_, current_version));//EmbFile
-        }
-        TF_CHECK_OK(UpdateFlushStatus());
-        buffer_cur = 0;
-      }
-      //====]
-      hash_map[keys[i]] = EmbPosition(current_offset, current_version,
-                                      buffer_cur * val_len, false);
-      current_offset += val_len;
-      memcpy(write_buffer + buffer_cur * val_len,
-             (char*)value_ptrs[i]->GetPtr(), val_len);
-      key_buffer[buffer_cur] = keys[i];
-      ++buffer_cur;
+      CheckBuffer();
+      SaveKV(keys[i], value_ptrs[i]);
       delete value_ptrs[i];
     }
     return Status::OK();
@@ -171,24 +137,8 @@ class SSDKV : public KVInterface<K, V> {
     SingleThreadDynamicCompaction();
     spin_wr_lock l(mu);
     total_app_count++;
-    if (buffer_cur * val_len + val_len > buffer_size) {
-      emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
-      emb_files[current_version].app_count += buffer_cur;
-      if (emb_files[current_version].app_count >= max_app_count) {
-        ++current_version;
-        current_offset = 0;
-        emb_files.push_back(EmbFile(path_, current_version));
-      }
-      TF_CHECK_OK(UpdateFlushStatus());
-      buffer_cur = 0;
-    }
-    hash_map[key] = EmbPosition(current_offset, current_version,
-                                buffer_cur * val_len, false);
-    current_offset += val_len;
-    memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
-           val_len);
-    key_buffer[buffer_cur] = key;
-    ++buffer_cur;
+    CheckBuffer();
+    SaveKV(key, value_ptr);
     delete value_ptr;
     return Status::OK();
   }
@@ -232,6 +182,30 @@ class SSDKV : public KVInterface<K, V> {
   }
 
  private:
+  void CheckBuffer() {
+    if (buffer_cur * val_len + val_len > buffer_size) {
+      emb_files[current_version].fs.write(write_buffer, buffer_cur * val_len);
+      emb_files[current_version].app_count += buffer_cur;
+      if (emb_files[current_version].app_count >= max_app_count) {
+        ++current_version;
+        current_offset = 0;
+        emb_files.push_back(EmbFile(path_, current_version));
+      }
+      TF_CHECK_OK(UpdateFlushStatus());
+      buffer_cur = 0;
+    }
+  }
+
+  void SaveKV(K key, const ValuePtr<V>* value_ptr) {
+    hash_map[key] = EmbPosition(current_offset, current_version,
+                                buffer_cur * val_len, false);
+    current_offset += val_len;
+    memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
+           val_len);
+    key_buffer[buffer_cur] = key;
+    ++buffer_cur;
+  }
+
   void SingleThreadDynamicCompaction() {
     // return; // 策略
     spin_wr_lock l(mu);
@@ -254,26 +228,8 @@ class SSDKV : public KVInterface<K, V> {
         }
         emb_files[posi.version].fs.seekg(posi.offset, std::ios::beg);
         emb_files[posi.version].fs.read((char*)(val->GetPtr()), val_len);
-
-        if (buffer_cur * val_len + val_len > buffer_size) {
-          emb_files[current_version].fs.write(write_buffer,
-                                              buffer_cur * val_len);
-          emb_files[current_version].app_count += buffer_cur;
-          if (emb_files[current_version].app_count >= max_app_count) {
-            ++current_version;
-            current_offset = 0;
-            emb_files.push_back(EmbFile(path_, current_version));
-          }
-          TF_CHECK_OK(UpdateFlushStatus());
-          buffer_cur = 0;
-        }
-        hash_map[it.first] = EmbPosition(current_offset, current_version,
-                                         buffer_cur * val_len, false);
-        current_offset += val_len;
-        memcpy(write_buffer + buffer_cur * val_len, (char*)val->GetPtr(),
-               val_len);
-        key_buffer[buffer_cur] = it.first;
-        ++buffer_cur;
+        CheckBuffer();
+        SaveKV(it.first, val);
       }
       // remove file
       for (int i = 0; i <= save_version; ++i) {
