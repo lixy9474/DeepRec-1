@@ -52,6 +52,7 @@ from tensorflow.python.saved_model import loader
 
 
 class EmbeddingVariableTest(test_util.TensorFlowTestCase):
+  '''
   def testDynamicDimensionEmbeddingVariable(self):
     print("testDynamicDimensionEmbeddingVariable")
     with ops.device('/cpu:0'):
@@ -112,6 +113,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
     ops.reset_default_graph()
     with self.test_session() as sess:
       res = saver_module.import_meta_graph(meta_graph_def)
+  '''
 
   def testEmbeddingVariableForInitFromProto(self):
     print("testEmbeddingVariableForInitFromProto")
