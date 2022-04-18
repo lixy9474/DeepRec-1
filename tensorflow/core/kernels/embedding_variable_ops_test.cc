@@ -1121,7 +1121,7 @@ public:
     size_t size() { return ids.size(); }
 };
 
-/*
+
 void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys, int batch_size) {
   std::vector<ValuePtr<float>*> value_ptrs;
   for (int64 i = 0; i < keys.size(); ++i) {
@@ -1195,7 +1195,7 @@ void LevelDBKVTest(int total_size, int batch_size){
   KVInterface<int64, float>* hashmap = new LevelDBKV<int64, float>("/tmp/db_ut1");
   hashmap->SetTotalDims(128);
   ASSERT_EQ(hashmap->Size(), 0);
-  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
+  DataLoader dl("/root/code/shuffled_sample.csv", 0, total_size);
   auto t1 = std::thread(BatchCommit, hashmap, dl.ids, batch_size);
   t1.join();
   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
@@ -1204,8 +1204,8 @@ void LevelDBKVTest(int total_size, int batch_size){
 }
 
 TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
-  std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
-  std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
+  std::vector<int> total_size_list = {1000000};          // 10w, 100w
+  std::vector<int> batch_size_list = {256,20000}; // 200, 2000, 2w, 10w
   for (int total_size : total_size_list) {
     for (int batch_size : batch_size_list) {
       LOG(INFO) << "LevelDB total_size: " << total_size << ", batch_size: " << batch_size << std::endl;
@@ -1221,7 +1221,7 @@ void SSDKVTest(int total_size, int batch_size){
   KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
   hashmap->SetTotalDims(128);
   ASSERT_EQ(hashmap->Size(), 0);
-  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
+  DataLoader dl("/root/code/shuffled_sample.csv", 0, total_size);
   auto t1 = std::thread(BatchCommit, hashmap, dl.ids, batch_size);
   t1.join();
   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
@@ -1231,8 +1231,8 @@ void SSDKVTest(int total_size, int batch_size){
 
 
 TEST(KVInterfaceTest, TestLargeSSDKV) {
-  std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
-  std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
+  std::vector<int> total_size_list = {1000000};          // 10w, 100w
+  std::vector<int> batch_size_list = {256,20000}; // 200, 2000, 2w, 10w
   for (int total_size : total_size_list) {
     for (int batch_size : batch_size_list) {
       LOG(INFO) << "SSD total_size: " << total_size << ", batch_size: " << batch_size;
@@ -1247,11 +1247,11 @@ TEST(KVInterfaceTest, TestLargeSSDKV) {
 
 
 
-void LevelDBKVSingleTest(int total_size){
+/*void LevelDBKVSingleTest(int total_size){
   KVInterface<int64, float>* hashmap = new LevelDBKV<int64, float>("/tmp/db_ut1");
   hashmap->SetTotalDims(128);
   ASSERT_EQ(hashmap->Size(), 0);
-  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
+  DataLoader dl("/root/code/shuffled_sample.csv", 0, total_size);
   auto t1 = std::thread(SingleCommit, hashmap, dl.ids);
   t1.join();
   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
@@ -1278,7 +1278,7 @@ void SSDKVSingleTest(int total_size){
   KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
   hashmap->SetTotalDims(128);
   ASSERT_EQ(hashmap->Size(), 0);
-  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
+  DataLoader dl("/root/code/shuffled_sample.csv", 0, total_size);
   auto t1 = std::thread(SingleCommit, hashmap, dl.ids);
   t1.join();
   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
@@ -1300,11 +1300,11 @@ TEST(KVInterfaceTest, TestLargeSingleSSDKV) {
       
     }
   }
-}
-*/
+}*/
 
 
-// TEST(KVInterfaceTest, TestLargeConcurrentSSDKV) {
+
+//TEST(KVInterfaceTest, TestLargeConcurrentSSDKV) {
 //   std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
 //   std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
 //   for (int total_size : total_size_list) {
@@ -1336,7 +1336,7 @@ void TestLargeConcurrent(embedding::StorageManager<int64, float>* storage_manage
   variable->Init(value, 1);
   std::vector<ValuePtr<float>*> value_ptr_list;
   std::vector<int64> key_list;
-  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, 1000000);
+  DataLoader dl("/root/code/shuffled_sample.csv", 0, 1000000);
 
   for(int64 i = 0; i < dl.ids.size(); i++) {
     key_list.emplace_back(dl.ids[i]);
@@ -1344,9 +1344,6 @@ void TestLargeConcurrent(embedding::StorageManager<int64, float>* storage_manage
     tmp->SetValue(float(key_list[i]), 128);
     value_ptr_list.emplace_back(tmp);
   }
-
-  uint64 start = Env::Default()->NowNanos();
-  
 
   for (int64 i = 0; i < key_list.size();) {
     std::vector<int64> batch_keys;
@@ -1359,17 +1356,19 @@ void TestLargeConcurrent(embedding::StorageManager<int64, float>* storage_manage
     variable->Cache()->add_to_rank(batch_keys.data(), batch_keys.size());
   }
 
-  variable->storage_manager()->PrintTestInfo();
+  uint64 start = Env::Default()->NowNanos();
+
+  //variable->storage_manager()->PrintTestInfo();
   for(int64 i = 0; i < key_list.size(); i++) {
     ValuePtr<float>* tmp = nullptr;
     Status s = variable->storage_manager()->GetOrCreate(key_list[i], &tmp, 128);
     variable->Cache()->add_to_rank(&key_list[i], 1);
-    if((i + 1) % 1000 == 0){
+    /*if((i + 1) % 1000 == 0){
       variable->storage_manager()->PrintTestInfo();
-    }
+    }*/
     
-    ASSERT_EQ(s.ok(), true);
-    ValuePtr<float>* ori_tmp= new NormalContiguousValuePtr<float>(ev_allocator(), 128);
+    //ASSERT_EQ(s.ok(), true);
+    /*ValuePtr<float>* ori_tmp= new NormalContiguousValuePtr<float>(ev_allocator(), 128);
     ori_tmp->SetValue(float(key_list[i]), 128);
     if(!tmp->EqualTo(ori_tmp, 128)){
       LOG(INFO) << "key_list[i]" << key_list[i];
@@ -1379,7 +1378,7 @@ void TestLargeConcurrent(embedding::StorageManager<int64, float>* storage_manage
       ori_tmp->PrintValue(128);
       break;
     }
-    delete ori_tmp;
+    delete ori_tmp;*/
   }
 
   uint64 end = Env::Default()->NowNanos();

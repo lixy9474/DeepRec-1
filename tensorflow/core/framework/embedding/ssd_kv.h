@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "sparsehash/dense_hash_map"
+#include "sparsehash/dense_hash_map_lockless"
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/framework/embedding/leveldb_kv.h"
 #include "tensorflow/core/framework/embedding/value_ptr.h"
@@ -26,14 +27,18 @@ class SSDKV : public KVInterface<K, V> {
   SSDKV(std::string path) {
     path_ = io::JoinPath(
         path, "ssd_kv_" + std::to_string(Env::Default()->NowMicros()) + "_");
-    hash_map.max_load_factor(0.8);
+    /*hash_map.max_load_factor(0.8);
     hash_map.set_empty_key(-1);
+    hash_map.set_deleted_key(-2);*/
+    hash_map.max_load_factor(0.8);
+    hash_map.set_empty_key_and_value(-1, nullptr);
+    hash_map.set_counternum(16);
     hash_map.set_deleted_key(-2);
     current_version = 0;
     current_offset = 0;
     buffer_size = 4 * 1024;  // Write 4MB at once.
     buffer_cur = 0;
-    open_file_count = 24;
+    open_file_count = 100;
     emb_files.push_back(EmbFile(path_, current_version));
 
     counter_ = new SizeCounter<K>(8);
@@ -74,25 +79,25 @@ class SSDKV : public KVInterface<K, V> {
         return errors::NotFound("Unable to find Key: ", key_buffer[i],
                                 " in SSDKV.");
       } else {
-        iter->second.flushed = true;
+        iter->second->flushed = true;
       }
     }
     return Status::OK();
   }
 
   Status Lookup(K key, ValuePtr<V>** value_ptr) {
-    SingleThreadDynamicCompaction();
-    spin_rd_lock l(mu);
+    //SingleThreadDynamicCompaction();
+    //spin_rd_lock l(mu);
     auto iter = hash_map.find(key);
     if (iter == hash_map.end()) {
       return errors::NotFound("Unable to find Key: ", key, " in SSDKV.");
     } else {
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
-      EmbPosition posi = iter->second;
-      if (posi.flushed) {
-        emb_files[posi.version].Read((char*)(val->GetPtr()), val_len, posi.offset);
+      EmbPosition* posi = iter->second;
+      if (posi->flushed) {
+        emb_files[posi->version].Read((char*)(val->GetPtr()), val_len, posi->offset);
       } else {
-        memcpy((char*)val->GetPtr(), write_buffer + posi.buffer_offset,
+        memcpy((char*)val->GetPtr(), write_buffer + posi->buffer_offset,
                val_len);
       }
       *value_ptr = val;
@@ -101,8 +106,8 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   Status Insert(K key, const ValuePtr<V>* value_ptr) {
-    SingleThreadDynamicCompaction();
-    spin_wr_lock l(mu);
+    //SingleThreadDynamicCompaction();
+    //spin_wr_lock l(mu);
     auto iter = hash_map.find(key);
     if (iter == hash_map.end()) {
       CheckBuffer();
@@ -122,8 +127,8 @@ class SSDKV : public KVInterface<K, V> {
 
   Status BatchCommit(std::vector<K> keys,
                      std::vector<ValuePtr<V>*> value_ptrs) {
-    SingleThreadDynamicCompaction();
-    spin_wr_lock l(mu);
+    //SingleThreadDynamicCompaction();
+    //spin_wr_lock l(mu);
     total_app_count += keys.size();
     for (int i = 0; i < keys.size(); i++) {
       CheckBuffer();
@@ -134,8 +139,8 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   Status Commit(K key, const ValuePtr<V>* value_ptr) {
-    SingleThreadDynamicCompaction();
-    spin_wr_lock l(mu);
+    //SingleThreadDynamicCompaction();
+    //spin_wr_lock l(mu);
     total_app_count++;
     CheckBuffer();
     SaveKV(key, value_ptr);
@@ -145,7 +150,7 @@ class SSDKV : public KVInterface<K, V> {
 
   Status Remove(K key) {
     counter_->sub(key, 1);
-    spin_wr_lock l(mu);
+    //spin_wr_lock l(mu);
     if (hash_map.erase(key)) {
       return Status::OK();
     } else {
@@ -155,15 +160,15 @@ class SSDKV : public KVInterface<K, V> {
 
   Status GetSnapshot(std::vector<K>* key_list,
                      std::vector<ValuePtr<V>*>* value_ptr_list) {
-    spin_rd_lock l(mu);
+    //spin_rd_lock l(mu);
     for (const auto it : hash_map) {
       key_list->push_back(it.first);
-      EmbPosition posi = it.second;
+      EmbPosition* posi = it.second;
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
-      if (posi.flushed) {
-        emb_files[posi.version].Read((char*)(val->GetPtr()), val_len, posi.offset);
+      if (posi->flushed) {
+        emb_files[posi->version].Read((char*)(val->GetPtr()), val_len, posi->offset);
       } else {
-        memcpy((char*)val->GetPtr(), write_buffer + posi.buffer_offset,
+        memcpy((char*)val->GetPtr(), write_buffer + posi->buffer_offset,
                val_len);
       }
       value_ptr_list->push_back(val);
@@ -199,8 +204,13 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   void SaveKV(K key, const ValuePtr<V>* value_ptr) {
-    hash_map[key] = EmbPosition(current_offset, current_version,
-                                buffer_cur * val_len, false);
+    //hash_map[key] = EmbPosition(current_offset, current_version,
+    //                            buffer_cur * val_len, false);
+    EmbPosition* ep = new EmbPosition(current_offset, current_version, buffer_cur * val_len, false);
+    //hash_map[key] = ep;
+    //EmbPosition* ep = new EmbPosition(current_offset, current_version, buffer_cur * val_len, false);
+    hash_map.insert_lockless(
+        std::move(std::pair<K, EmbPosition*>(key, const_cast<EmbPosition*>(ep))));
     current_offset += val_len;
     memcpy(write_buffer + buffer_cur * val_len, (char*)value_ptr->GetPtr(),
            val_len);
@@ -210,7 +220,7 @@ class SSDKV : public KVInterface<K, V> {
 
   void SingleThreadDynamicCompaction() {
     // return; // 策略
-    spin_wr_lock l(mu);
+    //spin_wr_lock l(mu);
     if (hash_map.size() * compaction_ration < total_app_count) {
       emb_files[current_version].Write(write_buffer, buffer_cur * val_len);
       emb_files[current_version].app_count += buffer_cur;
@@ -223,12 +233,12 @@ class SSDKV : public KVInterface<K, V> {
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
       total_app_count = hash_map.size();  // important
       for (const auto it : hash_map) {
-        EmbPosition posi = it.second;
-        if (!posi.flushed) {
+        EmbPosition* posi = it->second;
+        if (!posi->flushed) {
           LOG(INFO) << "BUG!!!!!!!";
-          posi.Print();
+          posi->Print();
         }
-        emb_files[posi.version].Read((char*)(val->GetPtr()), val_len, posi.offset);
+        emb_files[posi->version].Read((char*)(val->GetPtr()), val_len, posi->offset);
         CheckBuffer();
         SaveKV(it.first, val);
       }
@@ -314,11 +324,20 @@ class SSDKV : public KVInterface<K, V> {
   };
   float compaction_ration;
   size_t max_app_count;
-  google::dense_hash_map<K, EmbPosition> hash_map;
+  //google::dense_hash_map<K, EmbPosition*> hash_map;
+  typedef google::dense_hash_map_lockless<K, EmbPosition*> LockLessHashMap;
+  static const int EMPTY_KEY_=-1;
+  static const int DELETED_KEY_=-2;
+  LockLessHashMap hash_map;
   std::vector<EmbFile> emb_files;
   size_t current_version;
   size_t current_offset;
 };
+
+/*template <class K, class V>
+const int LocklessHashMap<K, EmbPosition>::EMPTY_KEY_ = -1;
+template <class K, class V>
+const int LocklessHashMap<K, EmbPosition>::DELETED_KEY_ = -2;*/
 
 }  // namespace tensorflow
 
