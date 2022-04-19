@@ -112,33 +112,110 @@ class KvSparseApplyAdagradOp : public OpKernel {
 
     if (N > 0) {
       if (inner_dim > 0) {
-        auto indices_vec = indices.vec<TKey>();
-        auto grad_flat = grad.flat_outer_dims<T>();
-        T lr_scalar = lr.scalar<T>()();
-        Tstep gs = global_step.scalar<Tstep>()();
+        timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        if(var->IsHBMDRAM()) {
+          timespec part_start, part_end;
+          auto indices_flat = indices.flat<TKey>();
+          auto grad_flat = grad.flat_outer_dims<T>();
+          T lr_scalar = lr.scalar<T>()();
+          Tstep gs = global_step.scalar<Tstep>()();
+          const TKey* key_base = &indices_flat(0);
+          const T* grad_base = &grad_flat(0);
+          int block_dim = 128;
+          int embedding_dim = var->ValueLen(); 
 
-        auto do_work = [this, ctx, &indices_vec, var, accum, &grad_flat,
-            &gs, &lr_scalar] (int64 start_i, int64 limit_i) {
-          for (int64 i = start_i; i < limit_i; i++) {
-            const TKey index = indices_vec(i);
+          clock_gettime(CLOCK_MONOTONIC, &part_start);
+          TKey *ids = new TKey[N];
+          ValuePtr<T>** value_ptrs = new ValuePtr<T>*[N];
+          cudaMemcpy(ids, key_base, sizeof(TKey) * N, cudaMemcpyDeviceToHost);
+          clock_gettime(CLOCK_MONOTONIC, &part_end);
+          LOG(INFO) << "Key memcpy time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
+
+          clock_gettime(CLOCK_MONOTONIC, &part_start);
+          auto do_work = [var, ids, value_ptrs, gs] (int64 start, int64 limit) {
             ValuePtr<T>* value_ptr = nullptr;
-            bool is_filter = false;
-            OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr, &is_filter,
-                  gs));
-            if (is_filter) {
-              auto a = accum->flat(value_ptr);
-              auto g = grad_flat.template chip<0>(i);
-              auto v = var->flat(value_ptr);
-
-              a += g.square();
-              v -= g.constant(lr_scalar) * g * a.rsqrt();
-              var->Commit(index, value_ptr);
+            for(int i = start; i < limit; i++){
+              bool is_filter = false;
+              var->LookupOrCreateKey(ids[i], &value_ptr, &is_filter, gs);
+              value_ptrs[i] = value_ptr;
             }
-          }
-        };
-        const int64 cost = 1000; //very unreliable estimate for cost per step.
-        auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
-        Shard(worker_threads.num_threads, worker_threads.workers, N, cost, do_work);
+          };
+          const int64 cost = 1000; //very unreliable estimate for cost per step.
+          auto worker_threads = ctx->device()->tensorflow_cpu_worker_threads();
+          Shard(worker_threads->num_threads, worker_threads->workers, N, cost, do_work);
+          clock_gettime(CLOCK_MONOTONIC, &part_end);
+          LOG(INFO) << "Lookup time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
+
+          clock_gettime(CLOCK_MONOTONIC, &part_start);
+          bool* init_flags = new bool[N]();
+          T** a = new T*[N];
+          T** v = new T*[N];
+          auto do_work2 = [var, accum, value_ptrs, init_flags, a, v] (int64 start, int64 limit) {
+            for(int i = start; i < limit; i++){
+              a[i] = accum->LookupOrCreateEmb(value_ptrs[i], init_flags[i]);
+              v[i] = var->LookupOrCreateEmb(value_ptrs[i], var->GetDefaultValue(0));
+            }
+          };//Get V*
+          Shard(worker_threads->num_threads, worker_threads->workers, N, cost, do_work2);
+          clock_gettime(CLOCK_MONOTONIC, &part_end);
+          LOG(INFO) << "Get V* time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
+
+          clock_gettime(CLOCK_MONOTONIC, &part_start);
+          T **dev_a, **dev_v;
+          T* default_value = accum->GetDefaultValue(0);
+          bool *dev_init_flags;
+          dev_init_flags = (bool*)var->GetBuffer1(N);
+          //cudaMalloc(&dev_init_flags, sizeof(bool) * N);
+          dev_a = (T**)var->GetBuffer2(N);
+          dev_v = (T**)var->GetBuffer3(N);
+          cudaMemcpy(dev_a, a, sizeof(T*) * N, cudaMemcpyHostToDevice);
+          cudaMemcpy(dev_v, v, sizeof(T*) * N, cudaMemcpyHostToDevice);
+          cudaMemcpy(dev_init_flags, init_flags, sizeof(bool) * N, cudaMemcpyHostToDevice);
+          clock_gettime(CLOCK_MONOTONIC, &part_end);
+          LOG(INFO) << "address memcpy time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
+          
+          clock_gettime(CLOCK_MONOTONIC, &part_start);
+          void* args[] = { (void*)&dev_a, (void*)&dev_v, (void*)&grad_base, (void*)&lr_scalar, (void*)&embedding_dim, (void*)&N, (void*)&dev_init_flags, (void*)&default_value};
+          cudaLaunchKernel((void *)SparseApplyAdagradGPU<T>, (N + block_dim - 1) / block_dim * embedding_dim, block_dim, args, 0, NULL);
+          cudaDeviceSynchronize();
+          clock_gettime(CLOCK_MONOTONIC, &part_end);
+          LOG(INFO) << "apply time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
+
+          delete[] a;
+          delete[] v;    
+          delete[] ids;
+          delete[] value_ptrs;
+        }
+        else {
+          auto indices_vec = indices.vec<TKey>();
+          auto grad_flat = grad.flat_outer_dims<T>();
+          T lr_scalar = lr.scalar<T>()();
+          Tstep gs = global_step.scalar<Tstep>()();
+          auto do_work = [this, ctx, &indices_vec, var, accum, &grad_flat,
+              &gs, &lr_scalar] (int64 start_i, int64 limit_i) {
+            for (int64 i = start_i; i < limit_i; i++) {
+              const TKey index = indices_vec(i);
+              ValuePtr<T>* value_ptr = nullptr;
+              bool is_filter = false;
+              OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr, &is_filter,
+                    gs));
+              if (is_filter) {
+                auto a = accum->flat(value_ptr);
+                auto g = grad_flat.template chip<0>(i);
+                auto v = var->flat(value_ptr);
+                a += g.square();
+                v -= g.constant(lr_scalar) * g * a.rsqrt();
+                var->Commit(index, value_ptr);
+              }
+            }
+          };
+          const int64 cost = 1000; //very unreliable estimate for cost per step.
+          auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
+          Shard(worker_threads.num_threads, worker_threads.workers, N, cost, do_work);
+        }//IsHBM_DRAM
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        LOG(INFO) << "Total Op time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
       }
     }
   }
@@ -163,6 +240,26 @@ class KvSparseApplyAdagradOp : public OpKernel {
 TF_CALL_float(REGISTER_CPU_KERNELS);
 
 #undef REGISTER_CPU_KERNELS
+#undef REGISTER_KERNELS
+
+#define REGISTER_KERNELS(Tindices, T, Tstep)                         \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceSparseApplyAdagrad")       \
+                              .Device(DEVICE_GPU)                    \
+                              .TypeConstraint<T>("T")                \
+                              .HostMemory("lr")                      \
+                              .HostMemory("global_step")             \
+                              .TypeConstraint<Tindices>("Tindices")  \
+                              .TypeConstraint<Tstep>("Tstep"),       \
+                          KvSparseApplyAdagradOp<Tindices, T, Tstep>);
+#define REGISTER_GPU_KERNELS(T)        \
+  REGISTER_KERNELS(int32, T, int32);   \
+  REGISTER_KERNELS(int64, T, int32);   \
+  REGISTER_KERNELS(int32, T, int64);   \
+  REGISTER_KERNELS(int64, T, int64);
+
+TF_CALL_float(REGISTER_GPU_KERNELS);
+
+#undef REGISTER_GPU_KERNELS
 #undef REGISTER_KERNELS
 
 // Note, this op works on cpu only.

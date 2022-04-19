@@ -51,6 +51,7 @@ from tensorflow.python.saved_model import builder as saved_model_builder
 from tensorflow.python.saved_model import loader
 from tensorflow.core.protobuf import config_pb2 as config_pb3
 import time
+import random
 
 class EmbeddingVariableTest(test_util.TensorFlowTestCase):
   def testDynamicDimensionEmbeddingVariable(self):
@@ -1472,15 +1473,15 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
     print("testEmbeddingVariableForDRAM")
     def runTestAdagrad(self, var, g):
       search_list=[]
-      for i in range(0, 1024 * 128):
+      for i in range(0, 1024 * 2):
         search_list.append(i)
       emb = embedding_ops.embedding_lookup(var, math_ops.cast(search_list, dtypes.int64))
-      #fun = math_ops.multiply(emb, 2.0, name='multiply')
-      #loss = math_ops.reduce_sum(fun, name='reduce_sum')
-      #gs = training_util.get_or_create_global_step()
-      #opt = adagrad.AdagradOptimizer(0.1)
-      #g_v = opt.compute_gradients(loss)
-      #train_op = opt.apply_gradients(g_v)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad.AdagradOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v)
       init = variables.global_variables_initializer()
       #print(ops.get_default_graph().as_graph_def())
       #config = config_pb3.ConfigProto(log_device_placement=True)
@@ -1489,11 +1490,8 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
         sess.run([init])
         r = sess.run([emb])
-        r = sess.run([emb])
-        #r, _, _ = sess.run([emb, train_op,loss])
-        #r, _, _ = sess.run([emb, train_op,loss])
-        #r, _, _ = sess.run([emb, train_op,loss])
-        #r, _, _ = sess.run([emb, train_op,loss])
+        r, _, _ = sess.run([emb, train_op,loss])
+        r, _, _ = sess.run([emb, train_op,loss])
         return r
 
     with ops.Graph().as_default() as g, ops.device('/cpu:0'):
@@ -1934,30 +1932,30 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
     print("testEmbeddingVariableForHBMandDRAM")
     def runTestAdagrad(self, var, g):
       search_list=[]
-      for i in range(0, 1024 * 32):
+      search_list2=[]
+      for i in range(0, 1024 * 128):
         search_list.append(i)
+      for i in range(0, 1024 * 128):
+        search_list2.append(i)
+      random.shuffle(search_list)
       emb = embedding_ops.embedding_lookup(var, math_ops.cast(search_list, dtypes.int64))
-      #fun = math_ops.multiply(emb, 2.0, name='multiply')
-      #loss = math_ops.reduce_sum(fun, name='reduce_sum')
-      #gs = training_util.get_or_create_global_step()
-      #opt = adagrad.AdagradOptimizer(0.1)
-      #g_v = opt.compute_gradients(loss)
-      #train_op = opt.apply_gradients(g_v)
+      emb2 = embedding_ops.embedding_lookup(var, math_ops.cast(search_list2, dtypes.int64))
+      
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad.AdagradOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v)
       init = variables.global_variables_initializer()
       #config = config_pb3.ConfigProto(log_device_placement=True)
       with self.test_session(graph=g) as sess:
         sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
         sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
         sess.run([init])
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb])
-        #r, _, _ = sess.run([emb, train_op,loss])
-        #r, _, _ = sess.run([emb, train_op,loss])
-        #r, _, _ = sess.run([emb, train_op,loss])
-        #r, _, _ = sess.run([emb, train_op,loss])
-        #r, _, _ = sess.run([emb, train_op,loss])
+        r = sess.run([emb2])
+        r, _, _ = sess.run([emb, train_op,loss])
+        r, _, _ = sess.run([emb, train_op,loss])
         return r
 
     with ops.Graph().as_default() as g, ops.device('/gpu:0'):

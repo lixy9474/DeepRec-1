@@ -430,11 +430,8 @@ class KvResourceGatherOp : public OpKernel {
 
     std::function<void(TKey, TValue*, TValue*)> lookup_or_create_fn;
     std::function<void(TKey*, TValue*, TValue**, int64, int64)> lookup_or_create_fn_batch;
-    if(ev->IsHBMDRAM()){
-      //lookup_or_create_fn_batch = [ev] (TKey* indexs, TValue* out_base, TValue** default_vs, int64 size, int64 slice_elems){
-      //                            ev->LookupOrCreateWithFreqGPUBatch(indexs, out_base, default_vs, size, slice_elems);};
-    }
-    else if (ev->IsMultiLevel()) {
+    
+    if (ev->IsMultiLevel()) {
       lookup_or_create_fn = [ev] (TKey index, TValue* out, TValue* default_v){
                                   ev->LookupOrCreateWithFreq(index, out, default_v);};
     } else {
@@ -472,29 +469,30 @@ class KvResourceGatherOp : public OpKernel {
         Shard(worker_threads->num_threads, worker_threads->workers, indices_size,
             slice_bytes, do_work);
       } else {
+        timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start);
         if(ev->IsHBMDRAM()){
-          timespec start, end, part_start, part_end;
-          clock_gettime(CLOCK_MONOTONIC, &start);
+          timespec part_start, part_end;
           clock_gettime(CLOCK_MONOTONIC, &part_start);
-          bool* init_flags = new bool[indices_size];
+          bool* init_flags = new bool[indices_size]();
           TValue** memcpy_address = new TValue*[indices_size];
           TValue** default_values = new TValue*[indices_size];
+          TKey* ids = new TKey[indices_size];
           auto do_work = [this, indices_flat,
               out_base, slice_elems, c, ev, lookup_or_create_fn_batch, 
-              default_values, init_flags, memcpy_address] (int64 start, int64 limit) {
-            std::vector<TKey> ids;
+              default_values, init_flags, memcpy_address, ids] (int64 start, int64 limit) {
             for (int64 i = start; i < limit; ++i) {
               TValue* default_v;
               default_v = ev->GetDefaultValuePtr() +
                             ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
               default_values[i] = default_v;
-              ids.push_back(indices_flat(i));
+              ids[i] = indices_flat(i);
             }
-            ev->LookupWithFreqBatch(ids.data(), init_flags, memcpy_address, start, limit);
-            ev->storage_manager()->Schedule([ev, ids]() {
+            ev->LookupWithFreqBatch(ids, init_flags, memcpy_address, start, limit);
+            ev->storage_manager()->Schedule([ev, ids, start, limit]() {
               embedding::BatchCache<TKey>* cache = ev->Cache();
               if (cache) {
-                cache->add_to_rank(ids.data(), ids.size());
+                cache->add_to_rank(&ids[start], limit - start);
               }
             });
           };
@@ -508,13 +506,12 @@ class KvResourceGatherOp : public OpKernel {
           ev->CreateGPUBatch(out_base, default_values, indices_size, slice_elems, init_flags, memcpy_address);
           clock_gettime(CLOCK_MONOTONIC, &part_end);
           LOG(INFO) << "Memcpy time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
-
-          clock_gettime(CLOCK_MONOTONIC, &end);
-          LOG(INFO) << "Total time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+          delete []init_flags;
+          delete []memcpy_address;
+          delete []default_values;
+          delete []ids;
         }
         else{
-          timespec start,end;
-          clock_gettime(CLOCK_MONOTONIC, &start);
           auto do_work = [this, indices_flat,
               out_base, slice_elems, c, ev, lookup_or_create_fn] (int64 start, int64 limit) {
             std::vector<TKey> ids;
@@ -538,9 +535,9 @@ class KvResourceGatherOp : public OpKernel {
           auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
           Shard(8, worker_threads->workers, indices_size,
               slice_bytes, do_work);
-          clock_gettime(CLOCK_MONOTONIC, &end);
-          std::cout << "time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms" << std::endl;
-          }//ev->isHBMDRAM();
+        }//ev->isHBMDRAM();
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        LOG(INFO) << "Total time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
       }
     }
   }
