@@ -413,6 +413,11 @@ class StorageManager {
     return Status::OK();
   }
 
+  Status CommitForRestore(K key, ValuePtr<V>* value_ptr) {
+    TF_CHECK_OK(kvs_[0].first->CommitForRestore(key, value_ptr));
+    return Status::OK();
+  }
+
   void FreeValuePtr(ValuePtr<V>* value_ptr) {
     for (auto kv : kvs_) {
       kv.first->FreeValuePtr(value_ptr);
@@ -453,8 +458,8 @@ class StorageManager {
         ValuePtr<V>* value_ptr;
         for (int64 i = 0; i < true_size; ++i) {
           if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
-            TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
             TF_CHECK_OK(kvs_[1].first->Commit(evic_ids[i], value_ptr));
+            TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
             // delete value_ptr is nessary;
             value_ptr->Destroy(kvs_[0].second);
             delete value_ptr;

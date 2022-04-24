@@ -42,6 +42,7 @@ class KVInterface {
   virtual ~KVInterface() {}
   // KV Lookup
   virtual Status Lookup(K key, ValuePtr<V>** value_ptr) = 0;
+  virtual std::pair<int64, int64> LookupFile(K key) {};
   // KV Insert
   virtual Status Insert(K key, const ValuePtr<V>* value_ptr) = 0;
   // KV Remove
@@ -73,6 +74,8 @@ class KVInterface {
   virtual void FreeValuePtr(ValuePtr<V>* value_ptr) {}
 
   virtual Status Commit(K key, const ValuePtr<V>* value_ptr) {return Status::OK();}
+  virtual Status CommitForRestore(K key, ValuePtr<V>* value_ptr) {return Status::OK();}
+
 
   virtual Status GetSnapshot(std::vector<K>* key_list,
                              std::vector<ValuePtr<V>* >* value_ptr_list) = 0;

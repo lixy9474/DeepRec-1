@@ -293,6 +293,10 @@ class ValuePtr {
     LOG(FATAL) << "Unsupport UpdateTest in subclass of ValuePtrBase";
   }
 
+  virtual void MergeValuePtr(ValuePtr* val, int64 size) {
+    LOG(FATAL) << "Unsupport MergeValuetpr in subclass of ValuePtrBase";
+  }
+
  protected:
   void* ptr_;
   std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
@@ -421,6 +425,13 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
     ((FixedLengthHeader*)this->ptr_)->AddFreq();
   }
 
+  void MergeValuePtr(ValuePtr<V>* val, int64 size) {
+    int64* val_ptr = (int64*)val->GetPtr();
+    for(int i = 0; i < sizeof(FixedLengthHeader) + size/sizeof(int64); i++){
+      ((int64*)this->ptr_)[i] |= val_ptr[i];
+    }
+  }
+
   void AddFreq(int64 count) {
     ((FixedLengthHeader*)this->ptr_)->AddFreq(count);
   }
@@ -454,8 +465,8 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
   }
 
   void SetValue(V val, size_t size){
-    SetStep(int64(val));
-    SetFreq(int64(val));
+    //SetStep(int64(val));
+    //SetFreq(int64(val));
     for(int i = 0; i < size; ++i) {
       *((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) = val;
     }
