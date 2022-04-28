@@ -21,7 +21,7 @@ limitations under the License.
 #include "tensorflow/core/framework/embedding/value_ptr.h"
 #include "tensorflow/core/framework/embedding/batch.h"
 #include "tensorflow/core/lib/core/status.h"
-//#include "tensorflow/core/util/gpu_kernel_helper.h"
+
 
 namespace tensorflow {
 
@@ -82,54 +82,72 @@ class LocklessHashMapCPU : public KVInterface<K, V> {
     total_dims_ = total_dims;
   }
 
-  Status Commit(K key, ValuePtr<V>* value_ptr) { 
-    ValuePtr<V>* cpu_value_ptr = new NormalContiguousValuePtr<V>(ev_allocator(), total_dims_);
+  Status Commit(K key, const ValuePtr<V>* value_ptr) { 
+    ValuePtr<V>* cpu_value_ptr = new NormalContiguousValuePtr<V>(cpu_allocator(), total_dims_);
     cudaMemcpy((char *)cpu_value_ptr->GetPtr() + sizeof(FixedLengthHeader), *(char **)((char*)value_ptr->GetPtr() + sizeof(FixedLengthHeader)), total_dims_ * sizeof(V), cudaMemcpyDeviceToHost);
     memcpy((char *)cpu_value_ptr->GetPtr(),(char *)value_ptr->GetPtr(),sizeof(FixedLengthHeader));
-    value_ptr->Destroy(nullptr);
-    delete value_ptr;
     Insert(key, cpu_value_ptr);
     return Status::OK();
   }
   
   Status BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
+    timespec start, end;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
     int batch_size = keys.size();
     V** value_address = (V**)malloc(sizeof(V * ) * batch_size);
     V** dev_value_address;
     V* batch_data_place;
     V* dev_batch_data_place;
-    cudaMalloc(&dev_value_address, batch_size * sizeof(V *));
-    cudaMalloc(&dev_batch_data_place, sizeof(V) * batch_size * total_dims_); 
+    Allocator *allocator = ev_allocator();
+    dev_value_address = (V**)allocator->AllocateRaw(0, batch_size * sizeof(V *));
+    dev_batch_data_place = (V*)allocator->AllocateRaw(0, sizeof(V) * batch_size * total_dims_);
     batch_data_place = (V *)malloc(sizeof(V) * batch_size * total_dims_);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    LOG(INFO) << "Alloc Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+
     //Copy GPU addresses V*
+    clock_gettime(CLOCK_MONOTONIC, &start);
     for(int i = 0;i < batch_size;++i) {
       value_address[i] = *(V **)((char *)value_ptrs[i]->GetPtr() + sizeof(FixedLengthHeader));
     }
     cudaMemcpy(dev_value_address, value_address, sizeof(V *) * batch_size, cudaMemcpyHostToDevice);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    LOG(INFO) << "Memcpy Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+
     //Launch Kernel,Copy data to continuous place
-    //CopyEmbedding<V><<<1,batch_size>>>(dev_value_address, dev_batch_data_place, total_dims_);
+    clock_gettime(CLOCK_MONOTONIC, &start);
     int block_dim = 128;
     void* args[] = { (void*)&dev_value_address, (void*)&dev_batch_data_place, (void*)&total_dims_, (void*)&batch_size};
 
-    cudaLaunchKernel((void *)CopyEmbedding<V>, (batch_size + block_dim - 1) / block_dim, block_dim, args, 0, NULL);
+    cudaLaunchKernel((void *)CopyEmbedding<V>, (batch_size + block_dim - 1) / block_dim * total_dims_, block_dim, args, 0, NULL);
     cudaDeviceSynchronize();
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    LOG(INFO) << "Kernel Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
 
+    clock_gettime(CLOCK_MONOTONIC, &start);
     cudaMemcpy(batch_data_place, dev_batch_data_place, sizeof(V) * batch_size * total_dims_, cudaMemcpyDeviceToHost);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    LOG(INFO) << "Copy back Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+
     //Copy data to ValuePtrs in memory;Insert it into hashmap
+    clock_gettime(CLOCK_MONOTONIC, &start);
     for(int i = 0;i < batch_size;++i){
-      ValuePtr<V>* cpu_value_ptr = new NormalContiguousValuePtr<V>(ev_allocator(), total_dims_);
+      ValuePtr<V>* cpu_value_ptr = new NormalContiguousValuePtr<V>(cpu_allocator(), total_dims_);
       memcpy((char *)cpu_value_ptr->GetPtr() + sizeof(FixedLengthHeader), &batch_data_place[i * total_dims_], total_dims_ * sizeof(V));
       memcpy((char *)cpu_value_ptr->GetPtr(),(char *)value_ptrs[i]->GetPtr(),sizeof(FixedLengthHeader));
-      value_ptrs[i]->Destroy(nullptr);
-      delete value_ptrs[i];
       Insert(keys[i], cpu_value_ptr);
     }
-    cudaFree(dev_batch_data_place);
-    cudaFree(dev_value_address);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    LOG(INFO) << "Unpack Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+
+    allocator->DeallocateRaw(dev_value_address);
+    allocator->DeallocateRaw(dev_batch_data_place);
+
     delete []value_address;
     return Status::OK();
   }
-  
+
   /*
   Status BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
     int batch_size = keys.size();
@@ -139,7 +157,7 @@ class LocklessHashMapCPU : public KVInterface<K, V> {
     return Status::OK();
   }
   */
-  
+
   Status GetSnapshot(std::vector<K>* key_list, std::vector<ValuePtr<V>* >* value_ptr_list) {
     std::pair<const K, ValuePtr<V>*> *hash_map_dump;
     int64 bucket_count;

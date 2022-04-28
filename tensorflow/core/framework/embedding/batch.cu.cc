@@ -71,10 +71,8 @@ template __global__ void SparseApplyAdagradGPU<double>(double**, double**, doubl
 template<class V>
 __global__ void CopyEmbedding(V** batch, V* batch_data_space, int total_dims_, int limit) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
-  if(i < limit){
-    for(int j = 0;j < total_dims_;j++){
-      batch_data_space[i * total_dims_ + j] = *(batch[i] + j);
-    }
+  if(i < limit  * total_dims_){
+    batch_data_space[i] = *(batch[i / total_dims_] + i % total_dims_);
   }
 }
 
