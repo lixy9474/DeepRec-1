@@ -1931,14 +1931,18 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
   def testEmbeddingVariableForHBMandDRAM(self):
     print("testEmbeddingVariableForHBMandDRAM")
     def runTestAdagrad(self, var, g):
-      search_list=[]
-      search_list2=[]
+      search_list = []
+      search_list2 = []
+      search_list3 = []
       for i in range(0, 1024 * 8 + 1000):
         search_list.append(i)
       for i in range(1024 * 8 + 1000, 1024 * 16 + 3000):
         search_list2.append(i)
+      for i in range(0, 4):
+        search_list3.append(i)
       emb = embedding_ops.embedding_lookup(var, math_ops.cast(search_list, dtypes.int64))
       emb2 = embedding_ops.embedding_lookup(var, math_ops.cast(search_list2, dtypes.int64))
+      emb3 = embedding_ops.embedding_lookup(var, math_ops.cast(search_list3, dtypes.int64))
       
       fun = math_ops.multiply(emb, 2.0, name='multiply')
       loss = math_ops.reduce_sum(fun, name='reduce_sum')
@@ -1952,26 +1956,26 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
         sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
         sess.run([init])
-        r = sess.run([emb2])
-        r = sess.run([emb]) 
         r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb]) 
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb]) 
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb]) 
-        r = sess.run([emb])
-        r = sess.run([emb])
-        r = sess.run([emb])
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb2]) 
+        r = sess.run([emb3]) 
         r = sess.run([emb])
         #r, _, _ = sess.run([emb, train_op,loss])
         #r, _, _ = sess.run([emb, train_op,loss])

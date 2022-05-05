@@ -132,7 +132,7 @@ class LocklessHashMapCPU : public KVInterface<K, V> {
 
     //Copy data to ValuePtrs in memory;Insert it into hashmap
     clock_gettime(CLOCK_MONOTONIC, &start);
-    for(int i = 0;i < batch_size;++i){
+    for(int i = 0;i < batch_size;++i) {
       ValuePtr<V>* cpu_value_ptr = new NormalContiguousValuePtr<V>(cpu_allocator(), total_dims_);
       memcpy((char *)cpu_value_ptr->GetPtr() + sizeof(FixedLengthHeader), &batch_data_place[i * total_dims_], total_dims_ * sizeof(V));
       memcpy((char *)cpu_value_ptr->GetPtr(),(char *)value_ptrs[i]->GetPtr(),sizeof(FixedLengthHeader));

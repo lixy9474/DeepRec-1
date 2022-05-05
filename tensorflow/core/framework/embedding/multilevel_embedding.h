@@ -229,6 +229,16 @@ class StorageManager {
     if (!found) {
       *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
     }
+
+    if(level && sc_.type == StorageType::HBM_DRAM && found){
+      ValuePtr<V>* gpu_value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
+      V* cpu_data_address = (*value_ptr)->GetValue(0, 0);
+      V* gpu_data_address = (*value_ptr)->GetValue(0, 0);
+      cudaMemcpy(gpu_data_address, cpu_data_address, size * sizeof(V), cudaMemcpyHostToDevice);
+      kvs_[0].first->Insert(key, gpu_value_ptr);
+      *value_ptr = gpu_value_ptr;
+    }
+    
     if (level || !found) {
       Status s = kvs_[0].first->Insert(key, *value_ptr);
       if (s.ok()) {
@@ -417,11 +427,8 @@ class StorageManager {
       }
     }
     K evic_ids[kSize];
-    while (true) {
+    while (!shutdown_) {
       mutex_lock l(mu_);
-      if (shutdown_) {
-        break;
-      }
       const int kTimeoutMilliseconds = 1;
       WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
 
