@@ -47,14 +47,10 @@ template <class K, class V>
 class StorageManager {
  public:
   StorageManager(const string& name,
-                 StorageConfig sc,
-                 size_t cap = -1)
+                 StorageConfig sc)
 : hash_table_count_(0),
   name_(name),
   sc_(sc),
-  cache_(nullptr),
-  cache_capacity_(cap),
-  eviction_thread_(nullptr),
   total_dims_(0),
   alloc_len_(0),
   is_multi_level_(false) {}
@@ -63,7 +59,9 @@ class StorageManager {
     for (auto kv: kvs_) {
       delete kv.first;
     }
-    delete cache_;
+    for (auto cache: caches_){
+      delete cache;
+    }
   }
 
   Status Init() {
@@ -134,15 +132,24 @@ class StorageManager {
 
     hash_table_count_ = kvs_.size();
     if (hash_table_count_ > 1) {
-      cache_ = new LRUCache<K>();
-      eviction_thread_ = Env::Default()->StartThread(ThreadOptions(), "EV_Eviction",
-                                                     [this]() { BatchEviction(); });
+      for (int i = 1; i < hash_table_count_; i++) {
+        caches_.emplace_back(new LRUCache<K>());
+        cache_capacities_.emplace_back(0);
+        done_.emplace_back(false);
+        shutdowns_.emplace_back(false);
+        std::string name = "EV_Eviction" + std::to_string(i);
+        eviction_threads_.emplace_back(Env::Default()->StartThread(ThreadOptions(), "EV_Eviction",
+                                                     [this, i]() { BatchEviction(i - 1, i);}));
+      }
       thread_pool_.reset(new thread::ThreadPool(Env::Default(), ThreadOptions(),
-                                               "MultiLevel_Embedding_Cache", 2,
+                                                "MultiLevel_Embedding_Cache", 2,
                                                /*low_latency_hint=*/false));
+    } else {
+      caches_.emplace_back(nullptr);
+      cache_capacities_.emplace_back(0);
     }
     // DebugString();
-    CHECK(2 >= hash_table_count_) << "Not support multi-level(>2) embedding.";
+    //CHECK(2 >= hash_table_count_) << "Not support multi-level(>2) embedding.";
 
     return Status::OK();
   }
@@ -160,9 +167,11 @@ class StorageManager {
         kvs_[1].first->SetTotalDims(total_dims_);
       }
       if (hash_table_count_ > 1) {
-        cache_capacity_ = 1024 * 1024 * 1024 / (total_dims_ * sizeof(V));
-        done_ = true;
-        LOG(INFO) << "Cache cache_capacity: " << cache_capacity_;
+        for (int i = 0; i < hash_table_count_ - 1; i++) {
+          cache_capacities_[i] = 1024 * 1024 * 1024 / (total_dims_ * sizeof(V));
+          done_[i] = true;
+          LOG(INFO) << "Cache cache_capacity: " << cache_capacities_[i];
+        }    
       }
     }
     flag_.clear(std::memory_order_release);
@@ -309,7 +318,7 @@ class StorageManager {
   }
 
   Status Shrink(const EmbeddingConfig& emb_config, int64 value_len) {
-    mutex_lock l(mu_);
+    //mutex_lock l(mu_);
     for (auto kv : kvs_) {
       std::vector<K> key_list;
       std::vector<ValuePtr<V>* > value_ptr_list;
@@ -339,7 +348,7 @@ class StorageManager {
   }
 
   Status Shrink(int64 gs, int64 steps_to_live) {
-    mutex_lock l(mu_);
+    //mutex_lock l(mu_);
     for (auto kv : kvs_) {
       std::vector<K> key_list;
       std::vector<ValuePtr<V>* > value_ptr_list;
@@ -366,19 +375,30 @@ class StorageManager {
   }
 
   Status Destroy() {
-    if (eviction_thread_) {
+    /*if (eviction_thread_) {
       mutex_lock l(mu_);
       shutdown_cv_.notify_all();
       shutdown_ = true;
     }
-    delete eviction_thread_;
-    mutex_lock l(mu_);
-    std::vector<K> key_list;
-    std::vector<ValuePtr<V>* > value_ptr_list;
-    kvs_[0].first->GetSnapshot(&key_list, &value_ptr_list);
-    for (auto value_ptr : value_ptr_list) {
-      value_ptr->Destroy(kvs_[0].second);
-      delete value_ptr;
+    delete eviction_thread_;*/
+    //LOG(INFO)<<"!!!!!";
+    for (int i = 0; i < eviction_threads_.size(); i++) {
+      mutex_lock l(mus_[i]);
+      //LOG(INFO)<<"xxxxx";
+      shutdown_cvs_[i].notify_all();
+      shutdowns_[i] = true;
+    }
+    for (int i = 0; i < eviction_threads_.size(); i++) {
+      delete eviction_threads_[i];
+    }
+    for (int i = 0; i < hash_table_count_ - 1; i++){
+      std::vector<K> key_list;
+      std::vector<ValuePtr<V>* > value_ptr_list;
+      kvs_[i].first->GetSnapshot(&key_list, &value_ptr_list);
+      for (auto value_ptr : value_ptr_list) {
+        value_ptr->Destroy(kvs_[0].second);
+        delete value_ptr;
+      }    
     }
     return Status::OK();
   }
@@ -391,7 +411,7 @@ class StorageManager {
   }
 
   BatchCache<K>* Cache() {
-    return cache_;
+    return caches_[0];
   }
 
   Status Commit(K key, const ValuePtr<V>* value_ptr) {
@@ -410,45 +430,50 @@ class StorageManager {
     }
   }
 
-  mutex* get_mutex() { return &mu_; }
+  mutex* get_mutex(int i) { return &mus_[i]; }
 
  private:
-  void BatchEviction() {
+  void BatchEviction(int prev_level = 0,
+                     int next_level = 1,
+                     int wait_second = 10) {
     Env* env = Env::Default();
     const int kSize = 1000;
-    if (cache_capacity_ == -1) {
+    if (cache_capacities_[prev_level] == 0) {
       while (true) {
-        mutex_lock l(mu_);
-        if (done_) {
+        mutex_lock l(mus_[prev_level]);
+        if (done_[prev_level]) {
           break;
         }
       }
     }
     K evic_ids[kSize];
     while (true) {
-      mutex_lock l(mu_);
-      if (shutdown_) {
+      mutex_lock l(mus_[prev_level]);
+      if (shutdowns_[prev_level]){
         break;
       }
-      const int kTimeoutMilliseconds = 10 * 1;
-      WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
+      const int kTimeoutMilliseconds = wait_second;
+      WaitForMilliseconds(&l, &shutdown_cvs_[prev_level], kTimeoutMilliseconds);
 
-      int cache_count = cache_->size();
-      if (cache_count > cache_capacity_) {
+      int cache_count = caches_[prev_level]->size();
+      if (cache_count > cache_capacities_[prev_level]) {
         // eviction
-        int k_size = cache_count - cache_capacity_;
+        int k_size = cache_count - cache_capacities_[prev_level];
         k_size = std::min(k_size, kSize);
-        size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
+        size_t true_size = caches_[prev_level]->get_evic_ids(evic_ids, k_size);
         ValuePtr<V>* value_ptr;
         for (int64 i = 0; i < true_size; ++i) {
-          if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
-            TF_CHECK_OK(kvs_[1].first->Commit(evic_ids[i], value_ptr));
-            TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
+          if (kvs_[prev_level].first->Lookup(evic_ids[i], &value_ptr).ok()) {
+            TF_CHECK_OK(kvs_[next_level].first->Commit(evic_ids[i], value_ptr));
+            TF_CHECK_OK(kvs_[prev_level].first->Remove(evic_ids[i]));
             // delete value_ptr is nessary;
-            value_ptr->Destroy(kvs_[0].second);
+            value_ptr->Destroy(kvs_[prev_level].second);
             delete value_ptr;
           } else {
             // bypass
+          }
+          if (next_level < hash_table_count_ - 1){
+            caches_[next_level]->add_to_rank(evic_ids, kSize);
           }
         }
       }
@@ -467,14 +492,14 @@ class StorageManager {
   int64 total_dims_;
 
   std::unique_ptr<thread::ThreadPool> thread_pool_;
-  Thread* eviction_thread_;
-  BatchCache<K>* cache_;
-  size_t cache_capacity_;
-  mutex mu_;
-  condition_variable shutdown_cv_;
-  bool shutdown_ GUARDED_BY(mu_) = false;
+  std::vector<Thread*> eviction_threads_;
+  std::vector<BatchCache<K>*> caches_;
+  std::vector<size_t> cache_capacities_;
+  mutex mus_[4];
+  condition_variable shutdown_cvs_[4];
+  std::vector<bool> shutdowns_;
 
-  bool done_ = false;
+  std::vector<bool> done_;
   std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
 
 };

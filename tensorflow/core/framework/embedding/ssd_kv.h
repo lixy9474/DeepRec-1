@@ -402,4 +402,4 @@ class SSDKV : public KVInterface<K, V> {
 }  // namespace embedding
 }  // namespace tensorflow
 
-#endif TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_SSD_KV_H_
+#endif //TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_SSD_KV_H_

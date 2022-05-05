@@ -175,7 +175,7 @@ Status DumpEmbeddingValues(EmbeddingVar<K, V>* ev, const string& tensor_key, Bun
   std::vector<int64> tot_freq_filter_list;
   std::vector<int64> tot_version_filter_list;
   embedding::Iterator* it = nullptr;
-  mutex_lock l(*ev->storage_manager()->get_mutex());
+  //mutex_lock l(*ev->storage_manager()->get_mutex());
   int64 total_size = ev->GetSnapshot(&tot_key_list, &tot_valueptr_list, &tot_version_list, &tot_freq_list, &it);
   VLOG(1) << "EV:" << tensor_key << ", save size:" << total_size;
   int64 iterator_size = 0;
