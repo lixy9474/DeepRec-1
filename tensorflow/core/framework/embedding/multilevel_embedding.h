@@ -230,11 +230,12 @@ class StorageManager {
       *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
     }
 
-    if(level && sc_.type == StorageType::HBM_DRAM && found){
+    if(sc_.type == StorageType::HBM_DRAM && level && found){
       ValuePtr<V>* gpu_value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
       V* cpu_data_address = (*value_ptr)->GetValue(0, 0);
       V* gpu_data_address = (*value_ptr)->GetValue(0, 0);
       cudaMemcpy(gpu_data_address, cpu_data_address, size * sizeof(V), cudaMemcpyHostToDevice);
+      LOG(INFO) << "key:" << key;
       kvs_[0].first->Insert(key, gpu_value_ptr);
       *value_ptr = gpu_value_ptr;
     }
@@ -443,6 +444,7 @@ class StorageManager {
         if(sc_.type == StorageType::HBM_DRAM){
           std::vector<K> keys;
           std::vector<ValuePtr<V>*> value_ptrs;
+          LOG(INFO) << "Cache_count: " << cache_count;
           timespec start, end;
 
           clock_gettime(CLOCK_MONOTONIC, &start);
@@ -450,6 +452,7 @@ class StorageManager {
             if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
               TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
               keys.push_back(evic_ids[i]);
+              LOG(INFO) << "evict:" << evic_ids[i];
               value_ptrs.push_back(value_ptr);
             }
           }
@@ -461,7 +464,6 @@ class StorageManager {
             delete value_ptrs[i];
           }
           clock_gettime(CLOCK_MONOTONIC, &end);
-          //std::cout << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << std::endl;
           LOG(INFO) << "Total Evict Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
         }
         else{

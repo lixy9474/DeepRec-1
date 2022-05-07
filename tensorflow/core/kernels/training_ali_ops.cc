@@ -125,6 +125,7 @@ class KvSparseApplyAdagradOp : public OpKernel {
           int block_dim = 128;
           int embedding_dim = var->ValueLen(); 
 
+          LOG(INFO) << "N:" << N;
           clock_gettime(CLOCK_MONOTONIC, &part_start);
           TKey *ids = new TKey[N];
           ValuePtr<T>** value_ptrs = new ValuePtr<T>*[N];
