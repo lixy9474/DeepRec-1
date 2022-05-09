@@ -148,28 +148,31 @@ Status SaveTensorWithFixedBuffer(const string& tensor_name,
     total_bytes_written += sizeof(T);
   }
   if (it != nullptr) {
+    void* val;
+    if (value_offset == -1) {
+      val = (void*)malloc(sizeof(T));
+    } else {
+      val = (void*)malloc(sizeof(T) * dump_tensor_shape.dim_size(1));
+    }
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
-      std::string value_str;
       int64 dim = 0;
       void* start = nullptr;
       if (value_offset == -1) {
-        value_str = it->Key();
-
+        it->Key(val, sizeof(T));
         if (bytes_written + sizeof(T) > bytes_limit) {
           dump_happened = true;
           writer->AppendSegmentData(dump_buffer, bytes_written);
           bytes_written = 0;
           buffer_idx = 0;
         }
-        key_dump_buffer[buffer_idx] = *((T*)&value_str[0]);
+        key_dump_buffer[buffer_idx] = *((T*)val);
         buffer_idx++;
         bytes_written += sizeof(T);
         total_bytes_written += sizeof(T);
 
       } else {
-        value_str = it->Value();
         dim = dump_tensor_shape.dim_size(1);
-        start = &value_str[0] + sizeof(FixedLengthHeader);
+        it->Value(val, dim * sizeof(T), value_offset * sizeof(T));
 
         for (int j = 0; j < dim; ++j) {
           if (bytes_written + sizeof(T) > bytes_limit) {
@@ -178,13 +181,14 @@ Status SaveTensorWithFixedBuffer(const string& tensor_name,
             bytes_written = 0;
             buffer_idx = 0;
           }
-          key_dump_buffer[buffer_idx] = *((T*)start + j + value_offset);
+          key_dump_buffer[buffer_idx] = *((T*)val + j);
           buffer_idx++;
           bytes_written += sizeof(T);
           total_bytes_written += sizeof(T);
         }
       }
     }
+    free(val);
   }
   if (!dump_happened) {
     VLOG(1) << tensor_name << " only one buffer written, size:" << bytes_written;
