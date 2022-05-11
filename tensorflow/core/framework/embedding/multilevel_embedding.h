@@ -233,10 +233,9 @@ class StorageManager {
     if(sc_.type == StorageType::HBM_DRAM && level && found){
       ValuePtr<V>* gpu_value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
       V* cpu_data_address = (*value_ptr)->GetValue(0, 0);
-      V* gpu_data_address = (*value_ptr)->GetValue(0, 0);
+      V* gpu_data_address = gpu_value_ptr->GetValue(0, 0);
       cudaMemcpy(gpu_data_address, cpu_data_address, size * sizeof(V), cudaMemcpyHostToDevice);
       LOG(INFO) << "key:" << key;
-      kvs_[0].first->Insert(key, gpu_value_ptr);
       *value_ptr = gpu_value_ptr;
     }
     
