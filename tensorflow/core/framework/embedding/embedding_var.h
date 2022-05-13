@@ -123,6 +123,15 @@ class EmbeddingVar : public ResourceBase {
     return s;
   }
 
+  Status LookupOrCreateKey(K key, ValuePtr<V>** value_ptr, int64 update_version, bool &need_copyback) {
+    Status s = storage_manager_->GetOrCreate(key, value_ptr, emb_config_.total_num(storage_manager_->GetAllocLen()), need_copyback);
+    TF_CHECK_OK(s);
+    if (emb_config_.is_primary() && emb_config_.steps_to_live != 0 && update_version != -1) {
+      (*value_ptr)->SetStep(update_version);
+    }
+    return s;
+  }
+
   void BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
     TF_CHECK_OK(storage_manager_->BatchCommit(keys, value_ptrs));
   }
@@ -147,11 +156,17 @@ class EmbeddingVar : public ResourceBase {
     filter_->LookupOrCreateWithFreq(key, val, default_value_ptr);
   }
 
-  void LookupWithFreqBatch(K* keys, bool *init_flags, V** memcpy_address, int start, int limit){
+  void LookupWithFreqBatch(K* keys, bool *init_flags, bool *copyback_flags, V** memcpy_address, int start, int limit){
     ValuePtr<V>* value_ptr = nullptr;
     for(int i = start; i < limit; i++){
-      TF_CHECK_OK(LookupOrCreateKey(keys[i], &value_ptr));
-      memcpy_address[i] = LookupOrCreateEmb(value_ptr, init_flags[i]);
+      TF_CHECK_OK(LookupOrCreateKey(keys[i], &value_ptr, -1, copyback_flags[i]));
+      if(!copyback_flags[i]){
+        memcpy_address[i] = LookupOrCreateEmb(value_ptr, init_flags[i]);
+      }
+      else{
+        memcpy_address[i] = value_ptr->GetValue(0,0);
+      }
+        
       value_ptr->AddFreq();
     }
   }
@@ -165,6 +180,11 @@ class EmbeddingVar : public ResourceBase {
       default_values[i] = (default_values[i] == nullptr) ? default_value_ : default_values[i];
     }
     filter_->CreateGPUBatch(val_base, default_values, size, slice_elems, value_len_, init_flags, memcpy_address);
+  }
+
+  void CopyBackToGPU(K* keys, int64 size, bool* copyback_flags, V** memcpy_address){
+    size_t value_len = emb_config_.total_num(storage_manager_->GetAllocLen());
+    storage_manager_->CopyBackToGPU(keys, size, copyback_flags, memcpy_address, value_len);
   }
 
   void LookupOrCreate(K key, V* val, V* default_v, int64 count)  {

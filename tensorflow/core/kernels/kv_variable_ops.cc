@@ -475,12 +475,13 @@ class KvResourceGatherOp : public OpKernel {
           timespec part_start, part_end;
           clock_gettime(CLOCK_MONOTONIC, &part_start);
           bool* init_flags = new bool[indices_size]();
+          bool* copyback_flags = new bool[indices_size]();
           TValue** memcpy_address = new TValue*[indices_size];
           TValue** default_values = new TValue*[indices_size];
           TKey* ids = new TKey[indices_size];
           auto do_work = [this, indices_flat,
               out_base, slice_elems, c, ev, lookup_or_create_fn_batch, 
-              default_values, init_flags, memcpy_address, ids] (int64 start, int64 limit) {
+              default_values, init_flags, copyback_flags, memcpy_address, ids] (int64 start, int64 limit) {
             for (int64 i = start; i < limit; ++i) {
               TValue* default_v;
               default_v = ev->GetDefaultValuePtr() +
@@ -488,7 +489,7 @@ class KvResourceGatherOp : public OpKernel {
               default_values[i] = default_v;
               ids[i] = indices_flat(i);
             }
-            ev->LookupWithFreqBatch(ids, init_flags, memcpy_address, start, limit);
+            ev->LookupWithFreqBatch(ids, init_flags, copyback_flags, memcpy_address, start, limit);
             ev->storage_manager()->Schedule([ev, ids, start, limit]() {
               embedding::BatchCache<TKey>* cache = ev->Cache();
               if (cache) {
@@ -501,12 +502,19 @@ class KvResourceGatherOp : public OpKernel {
           Shard(8, worker_threads->workers, indices_size,
               slice_bytes, do_work);
           clock_gettime(CLOCK_MONOTONIC, &part_end);
-          //LOG(INFO) << "Lookup time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";  
+          LOG(INFO) << "Lookup time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms"; 
+
+          clock_gettime(CLOCK_MONOTONIC, &part_start);
+          ev->CopyBackToGPU(ids, indices_size, copyback_flags, memcpy_address);
+          clock_gettime(CLOCK_MONOTONIC, &part_end);
+          LOG(INFO) << "copyback time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
+
           clock_gettime(CLOCK_MONOTONIC, &part_start);
           ev->CreateGPUBatch(out_base, default_values, indices_size, slice_elems, init_flags, memcpy_address);
           clock_gettime(CLOCK_MONOTONIC, &part_end);
-          //LOG(INFO) << "Memcpy time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
+          LOG(INFO) << "Memcpy time: " << ((double)(part_end.tv_sec - part_start.tv_sec) * 1000000000 + part_end.tv_nsec - part_start.tv_nsec) / 1000000 << "ms";
           delete []init_flags;
+          delete []copyback_flags;
           delete []memcpy_address;
           delete []default_values;
           delete []ids;

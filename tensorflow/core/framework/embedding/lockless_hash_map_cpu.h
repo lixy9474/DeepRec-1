@@ -104,7 +104,7 @@ class LocklessHashMapCPU : public KVInterface<K, V> {
     dev_batch_data_place = (V*)allocator->AllocateRaw(0, sizeof(V) * batch_size * total_dims_);
     batch_data_place = (V *)malloc(sizeof(V) * batch_size * total_dims_);
     clock_gettime(CLOCK_MONOTONIC, &end);
-    LOG(INFO) << "Alloc Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+    //LOG(INFO) << "Alloc Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
 
     //Copy GPU addresses V*
     clock_gettime(CLOCK_MONOTONIC, &start);
@@ -113,7 +113,7 @@ class LocklessHashMapCPU : public KVInterface<K, V> {
     }
     cudaMemcpy(dev_value_address, value_address, sizeof(V *) * batch_size, cudaMemcpyHostToDevice);
     clock_gettime(CLOCK_MONOTONIC, &end);
-    LOG(INFO) << "Memcpy Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+    //LOG(INFO) << "Memcpy Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
 
     //Launch Kernel,Copy data to continuous place
     clock_gettime(CLOCK_MONOTONIC, &start);
@@ -123,12 +123,12 @@ class LocklessHashMapCPU : public KVInterface<K, V> {
     cudaLaunchKernel((void *)CopyEmbedding<V>, (batch_size + block_dim - 1) / block_dim * total_dims_, block_dim, args, 0, NULL);
     cudaDeviceSynchronize();
     clock_gettime(CLOCK_MONOTONIC, &end);
-    LOG(INFO) << "Kernel Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+    //LOG(INFO) << "Kernel Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
 
     clock_gettime(CLOCK_MONOTONIC, &start);
     cudaMemcpy(batch_data_place, dev_batch_data_place, sizeof(V) * batch_size * total_dims_, cudaMemcpyDeviceToHost);
     clock_gettime(CLOCK_MONOTONIC, &end);
-    LOG(INFO) << "Copy back Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+    //LOG(INFO) << "Copy back Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
 
     //Copy data to ValuePtrs in memory;Insert it into hashmap
     clock_gettime(CLOCK_MONOTONIC, &start);
@@ -139,7 +139,7 @@ class LocklessHashMapCPU : public KVInterface<K, V> {
       Insert(keys[i], cpu_value_ptr);
     }
     clock_gettime(CLOCK_MONOTONIC, &end);
-    LOG(INFO) << "Unpack Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
+    //LOG(INFO) << "Unpack Time: " << ((double)(end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec) / 1000000 << "ms";
 
     allocator->DeallocateRaw(dev_value_address);
     allocator->DeallocateRaw(dev_batch_data_place);

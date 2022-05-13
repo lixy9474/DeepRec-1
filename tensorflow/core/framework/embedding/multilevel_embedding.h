@@ -235,7 +235,6 @@ class StorageManager {
       V* cpu_data_address = (*value_ptr)->GetValue(0, 0);
       V* gpu_data_address = gpu_value_ptr->GetValue(0, 0);
       cudaMemcpy(gpu_data_address, cpu_data_address, size * sizeof(V), cudaMemcpyHostToDevice);
-      LOG(INFO) << "key:" << key;
       *value_ptr = gpu_value_ptr;
     }
     
@@ -253,6 +252,68 @@ class StorageManager {
       }
     }
     return Status::OK();
+  }
+
+Status GetOrCreate(K key, ValuePtr<V>** value_ptr, size_t size, bool &need_copyback) {
+    bool found = false;
+    int level = 0;
+    need_copyback = false;
+
+    for (; level < hash_table_count_; ++level) {
+      Status s = kvs_[level].first->Lookup(key, value_ptr);
+      if (s.ok()) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
+    }
+
+    if(sc_.type == StorageType::HBM_DRAM && level && found){
+      need_copyback = true;
+    }
+    
+    if ( (level || !found ) && !need_copyback) {
+      Status s = kvs_[0].first->Insert(key, *value_ptr);
+      if (s.ok()) {
+        // Insert Success
+        return s;
+      } else {
+        // Insert Failed, key already exist
+        (*value_ptr)->Destroy(kvs_[0].second);
+        delete *value_ptr;
+        s = kvs_[0].first->Lookup(key, value_ptr);
+        return s;
+      }
+    }
+    return Status::OK();
+  }
+
+  void CopyBackToGPU(K* keys, int64 size, bool* copyback_flags, V** memcpy_address, size_t value_len){
+    LOG(INFO) << size;
+    int total = 0;
+    for(int i = 0; i < size;i++){
+      if(copyback_flags[i]){
+        total++;
+      }
+    }
+    V* memcpy_buffer_cpu, memcpy_buffer_gpu;
+    LOG(INFO) << value_len;
+    LOG(INFO) << total;
+    memcpy_buffer_cpu = (V*)malloc(total * value_len * sizeof(V));
+    for(int i = 0; i < size;i++){
+      if(copyback_flags[i]){        
+        ValuePtr<V>* gpu_value_ptr = new_value_ptr_fn_(kvs_[0].second, size);//这里少了关于header信息的拷贝
+        V* cpu_data_address = memcpy_address[i];
+        LOG(INFO) << cpu_data_address[0];
+        V* gpu_data_address = gpu_value_ptr->GetValue(0, 0);
+        cudaMemcpy(gpu_data_address, cpu_data_address, size * sizeof(V), cudaMemcpyHostToDevice);
+        memcpy_address[i] = gpu_data_address;//这里有关于slot的bug
+        kvs_[0].first->Insert(keys[i], gpu_value_ptr);
+        LOG(INFO) << "end";
+      }
+    }
   }
 
   Status Remove(K key) {
@@ -451,7 +512,6 @@ class StorageManager {
             if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
               TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
               keys.push_back(evic_ids[i]);
-              LOG(INFO) << "evict:" << evic_ids[i];
               value_ptrs.push_back(value_ptr);
             }
           }
