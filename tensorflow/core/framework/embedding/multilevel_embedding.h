@@ -291,7 +291,6 @@ Status GetOrCreate(K key, ValuePtr<V>** value_ptr, size_t size, bool &need_copyb
   }
 
   void CopyBackToGPU(K* keys, int64 size, bool* copyback_flags, V** memcpy_address, size_t value_len){
-    LOG(INFO) << size;
     int total = 0;
     for(int i = 0; i < size;i++){
       if(copyback_flags[i]){
@@ -299,19 +298,17 @@ Status GetOrCreate(K key, ValuePtr<V>** value_ptr, size_t size, bool &need_copyb
       }
     }
     V* memcpy_buffer_cpu, memcpy_buffer_gpu;
-    LOG(INFO) << value_len;
-    LOG(INFO) << total;
     memcpy_buffer_cpu = (V*)malloc(total * value_len * sizeof(V));
     for(int i = 0; i < size;i++){
       if(copyback_flags[i]){        
-        ValuePtr<V>* gpu_value_ptr = new_value_ptr_fn_(kvs_[0].second, size);//这里少了关于header信息的拷贝
+        ValuePtr<V>* gpu_value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
+        //Copy Header Info
+        memcpy((char *)gpu_value_ptr->GetPtr(), (char *)memcpy_address[i] - sizeof(FixedLengthHeader), sizeof(FixedLengthHeader));
         V* cpu_data_address = memcpy_address[i];
-        LOG(INFO) << cpu_data_address[0];
         V* gpu_data_address = gpu_value_ptr->GetValue(0, 0);
         cudaMemcpy(gpu_data_address, cpu_data_address, size * sizeof(V), cudaMemcpyHostToDevice);
         memcpy_address[i] = gpu_data_address;//这里有关于slot的bug
         kvs_[0].first->Insert(keys[i], gpu_value_ptr);
-        LOG(INFO) << "end";
       }
     }
   }

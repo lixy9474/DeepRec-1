@@ -164,6 +164,7 @@ class EmbeddingVar : public ResourceBase {
         memcpy_address[i] = LookupOrCreateEmb(value_ptr, init_flags[i]);
       }
       else{
+        //memcpy_address[i] = LookupOrCreateEmb(value_ptr, init_flags[i]);
         memcpy_address[i] = value_ptr->GetValue(0,0);
       }
         

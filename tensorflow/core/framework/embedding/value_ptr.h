@@ -468,7 +468,7 @@ class NormalGPUValuePtr : public ValuePtr<V> {
   }
 
   // simple getter for V* and version
-  virtual V* GetValue(int emb_index, int64 value_len, int offset) {
+  virtual V* GetValue(int emb_index, int offset) {
     int8 meta = *((int8*)((char*)this->ptr_ + 6));
     std::bitset<8> bs(meta);
     if (bs.test(emb_index)) {

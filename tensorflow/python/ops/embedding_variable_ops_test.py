@@ -1981,8 +1981,6 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         r = sess.run([emb2])
         r = sess.run([emb2])
         r = sess.run([emb3])
-        r = sess.run([emb3])
-        r = sess.run([emb3])
         print("last")
         #r, _, _ = sess.run([emb3, train_op3, loss3])
         #r, _, _ = sess.run([emb3, train_op,loss])
