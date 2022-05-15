@@ -36,6 +36,22 @@ template __global__ void BatchCopy<double>(double**, double*, int, int, double**
 template __global__ void BatchCopy<long long>(long long**, long long*, int, int, long long**, bool*);
 
 template<class V>
+__global__ void BatchUnpack(V** dev_value_address, V* memcpy_buffer_gpu, int value_len, int limit) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  int item_id = i / value_len;
+  int item_pos = i % value_len;
+
+  if(i < limit * value_len){ 
+    *(dev_value_address[item_id] + item_pos) = memcpy_buffer_gpu[i];
+  }
+}
+
+template __global__ void BatchUnpack<int>(int**, int*, int, int);
+template __global__ void BatchUnpack<float>(float**, float*, int, int);
+template __global__ void BatchUnpack<double>(double**, double*, int, int);
+template __global__ void BatchUnpack<long long>(long long**, long long*, int, int);
+
+template<class V>
 __global__ void SparseApplyAdagradGPU(V** a, V** v, V* g, float lr, int embedding_dim, int limit, bool* init_flags, V* default_value) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
   int item_id = i / embedding_dim;

@@ -185,7 +185,40 @@ class EmbeddingVar : public ResourceBase {
 
   void CopyBackToGPU(K* keys, int64 size, bool* copyback_flags, V** memcpy_address){
     size_t value_len = emb_config_.total_num(storage_manager_->GetAllocLen());
-    storage_manager_->CopyBackToGPU(keys, size, copyback_flags, memcpy_address, value_len);
+    V* memcpy_buffer_gpu;
+    V** dev_value_address, **value_address;
+    int total = 0;
+    for(int i = 0; i < size;i++){
+      if(copyback_flags[i]){
+        total++;
+      }
+    }
+    int *copyback_cursor = new int[total]();
+    ValuePtr<V>** gpu_value_ptrs = new ValuePtr<V>* [total];
+    cudaMalloc(&memcpy_buffer_gpu, total * value_len * sizeof(V));
+    
+    storage_manager_->CopyBackToGPU(total, keys, size, copyback_flags, memcpy_address, value_len, copyback_cursor, gpu_value_ptrs, memcpy_buffer_gpu);
+
+    value_address = (V**)malloc(sizeof(V*) * total);
+    cudaMalloc(&dev_value_address, sizeof(V*) * total);
+
+    for(int i = 0;i < total;i++){
+      bool init;
+      memcpy_address[copyback_cursor[i]] = LookupOrCreateEmb(gpu_value_ptrs[i], init);
+      value_address[i] = memcpy_address[copyback_cursor[i]];
+    }
+
+    cudaMemcpy(dev_value_address, value_address, sizeof(V*) * total, cudaMemcpyHostToDevice);
+    int block_dim = 128;
+    void* args[] = { (void*)&dev_value_address, (void*)&memcpy_buffer_gpu, (void*)&value_len, (void*)&total};
+
+    cudaLaunchKernel((void *)BatchUnpack<V>, (total + block_dim - 1) / block_dim * value_len, block_dim, args, 0, NULL);
+    cudaDeviceSynchronize();
+
+    cudaFree(dev_value_address);
+    cudaFree(memcpy_buffer_gpu);
+    delete []copyback_cursor;
+    delete []gpu_value_ptrs;
   }
 
   void LookupOrCreate(K key, V* val, V* default_v, int64 count)  {
