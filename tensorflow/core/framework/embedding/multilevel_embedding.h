@@ -161,6 +161,7 @@ class StorageManager {
       }
       if (hash_table_count_ > 1) {
         cache_capacity_ = 1024 * 1024 * 1024 / (total_dims_ * sizeof(V));
+        cache_capacity_ *= 1;
         done_ = true;
         LOG(INFO) << "Cache cache_capacity: " << cache_capacity_;
       }
@@ -415,7 +416,7 @@ class StorageManager {
  private:
   void BatchEviction() {
     Env* env = Env::Default();
-    const int kSize = 1000;
+    const int kSize = 10000;
     if (cache_capacity_ == -1) {
       while (true) {
         mutex_lock l(mu_);
@@ -430,7 +431,7 @@ class StorageManager {
       if (shutdown_) {
         break;
       }
-      const int kTimeoutMilliseconds = 10 * 1;
+      const int kTimeoutMilliseconds = 1;
       WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
      
       for (int i = 0; i < value_ptr_out_of_date_.size(); i++) {
@@ -440,6 +441,7 @@ class StorageManager {
       value_ptr_out_of_date_.clear();
       
       int cache_count = cache_->size();
+      //LOG(INFO)<<"cache size: "<<cache_count;
       if (cache_count > cache_capacity_) {
         // eviction
         int k_size = cache_count - cache_capacity_;
@@ -477,7 +479,7 @@ class StorageManager {
   std::unique_ptr<thread::ThreadPool> thread_pool_;
   Thread* eviction_thread_;
   BatchCache<K>* cache_;
-  size_t cache_capacity_;
+  int64 cache_capacity_;
   mutex mu_;
   condition_variable shutdown_cv_;
   bool shutdown_ GUARDED_BY(mu_) = false;

@@ -203,10 +203,11 @@ class SSDKV : public KVInterface<K, V> {
       EmbPosition* old_posi = (*(iter.first)).second;
       __sync_bool_compare_and_swap(&((*(iter.first)).second),
                                    (*(iter.first)).second, ep);
+      //delete old_posi;
       if(pos_out_of_date.size() > 100000){
         EmbPosition* posi = pos_out_of_date.front();
         delete posi;
-        pos_out_of_date.erase(pos_out_of_date.begin());
+        pos_out_of_date.pop_front();
       }
       pos_out_of_date.emplace_back(old_posi);
     }
@@ -318,11 +319,11 @@ class SSDKV : public KVInterface<K, V> {
 
   class EmbPosition {
    public:
-    size_t offset;
-    size_t version;
-    size_t buffer_offset;
+    int offset;
+    int version;
+    int buffer_offset;
     bool flushed;
-    EmbPosition(size_t o, size_t v, size_t bo, bool f)
+    EmbPosition(int o, int v, int bo, bool f)
         : offset(o), version(v), buffer_offset(bo), flushed(f) {}
     EmbPosition()
         : offset(-1), version(-1), buffer_offset(-1), flushed(false) {}
@@ -400,7 +401,7 @@ class SSDKV : public KVInterface<K, V> {
   std::vector<EmbFile*> emb_files;
   EmbFile* active_file;
   std::vector<EmbFile*> files_out_of_date;
-  std::vector<EmbPosition*> pos_out_of_date;
+  std::deque<EmbPosition*> pos_out_of_date;
   std::set<int64> evict_file_set;
   std::map<int64, std::vector<std::pair<K, EmbPosition*>>> evict_file_map;
   size_t current_version;
