@@ -222,6 +222,13 @@ class StorageManager {
     bool found = false;
     int level = 0;
     for (; level < hash_table_count_; ++level) {
+      if (level) {
+        if (cache_) {
+          while (cache_->size() > cache_capacity_  && (cache_->size() - cache_capacity_ ) > (cache_capacity_ / 10)){
+             //LOG(INFO)<<cache_->size()<<", "<<cache_capacity_;
+          }
+        }
+      }
       Status s = kvs_[level].first->Lookup(key, value_ptr);
       if (s.ok()) {
         found = true;
@@ -441,7 +448,6 @@ class StorageManager {
       value_ptr_out_of_date_.clear();
       
       int cache_count = cache_->size();
-      //LOG(INFO)<<"cache size: "<<cache_count;
       if (cache_count > cache_capacity_) {
         // eviction
         int k_size = cache_count - cache_capacity_;
