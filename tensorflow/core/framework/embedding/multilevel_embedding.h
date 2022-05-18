@@ -83,6 +83,7 @@ class StorageManager {
     }
     
     switch (sc_.type) {
+      Allocator* alloc_ssd;
       case StorageType::DRAM:
         VLOG(1) << "StorageManager::DRAM: " << name_;
         kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
@@ -98,27 +99,29 @@ class StorageManager {
         break;
       case StorageType::LEVELDB:
         VLOG(1) << "StorageManager::LEVELDB: " << name_;
-        kvs_.push_back(std::make_pair(new LevelDBKV<K, V>(sc_.path), ev_allocator()));
+        kvs_.push_back(std::make_pair(new LevelDBKV<K, V>(sc_.path), cpu_allocator()));
         break;
       case StorageType::DRAM_PMEM:
         VLOG(1) << "StorageManager::DRAM_PMEM: " << name_;
-        kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
+        kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), cpu_allocator()));
         kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(),
                                       experimental_pmem_allocator(sc_.path, sc_.size)));
         break;
       case StorageType::DRAM_LEVELDB:
         VLOG(1) << "StorageManager::DRAM_LEVELDB: " << name_;
-        kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
-        kvs_.push_back(std::make_pair(new LevelDBKV<K, V>(sc_.path), ev_allocator()));
+        kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), cpu_allocator()));
+        kvs_.push_back(std::make_pair(new LevelDBKV<K, V>(sc_.path), cpu_allocator()));
         break;
       case StorageType::SSD:
         VLOG(1) << "StorageManager::SSD: " << name_;
-        kvs_.emplace_back(std::make_pair(new SSDKV<K, V>(sc_.path), ev_allocator()));
+	alloc_ssd = cpu_allocator();
+        kvs_.emplace_back(std::make_pair(new SSDKV<K, V>(sc_.path, alloc_ssd), alloc_ssd));
         break;
       case StorageType::DRAM_SSD:
         VLOG(1) << "StorageManager::DRAM_SSD: " << name_;
-        kvs_.emplace_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
-        kvs_.emplace_back(std::make_pair(new SSDKV<K, V>(sc_.path), ev_allocator()));
+	alloc_ssd = cpu_allocator();
+        kvs_.emplace_back(std::make_pair(new LocklessHashMap<K, V>(), alloc_ssd));
+        kvs_.emplace_back(std::make_pair(new SSDKV<K, V>(sc_.path, alloc_ssd), alloc_ssd));
         break;
       default:
         VLOG(1) << "StorageManager::default" << name_;
@@ -161,7 +164,7 @@ class StorageManager {
       }
       if (hash_table_count_ > 1) {
         cache_capacity_ = 1024 * 1024 * 1024 / (total_dims_ * sizeof(V));
-        cache_capacity_ *= 1;
+        cache_capacity_ *= 2;
         done_ = true;
         LOG(INFO) << "Cache cache_capacity: " << cache_capacity_;
       }
@@ -222,13 +225,13 @@ class StorageManager {
     bool found = false;
     int level = 0;
     for (; level < hash_table_count_; ++level) {
-      if (level) {
+      /*if (level) {
         if (cache_) {
           while (cache_->size() > cache_capacity_  && (cache_->size() - cache_capacity_ ) > (cache_capacity_ / 10)){
              //LOG(INFO)<<cache_->size()<<", "<<cache_capacity_;
           }
         }
-      }
+      }*/
       Status s = kvs_[level].first->Lookup(key, value_ptr);
       if (s.ok()) {
         found = true;

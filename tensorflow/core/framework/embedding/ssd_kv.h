@@ -27,7 +27,7 @@ namespace embedding {
 template <class K, class V>
 class SSDKV : public KVInterface<K, V> {
  public:
-  explicit SSDKV(std::string path) {
+  explicit SSDKV(std::string path, Allocator* alloc_) {
     path_ = io::JoinPath(
         path, "ssd_kv_" + std::to_string(Env::Default()->NowMicros()) + "_");
     hash_map.max_load_factor(0.8);
@@ -38,12 +38,13 @@ class SSDKV : public KVInterface<K, V> {
     current_offset = 0;
     buffer_size = 1 << 27;  // Write 128MB at once.
     buffer_cur = 0;
+    alloc = alloc_;
     open_file_count = 100;
     EmbFile* ef = new EmbFile(path_, current_version, buffer_size);
     emb_files.emplace_back(ef);
     total_app_count = 0;
-    new_value_ptr_fn_ = [](size_t size) {
-      return new NormalContiguousValuePtr<V>(ev_allocator(), size);
+    new_value_ptr_fn_ = [this](size_t size) {
+      return new NormalContiguousValuePtr<V>(alloc, size);
     };
     compaction_ration = 2;
   }
@@ -198,8 +199,13 @@ class SSDKV : public KVInterface<K, V> {
     auto iter = hash_map.insert_lockless(std::move(
         std::pair<K, EmbPosition*>(key, const_cast<EmbPosition*>(ep))));
     if ((*(iter.first)).second != ep) {
-      if (!is_compaction)
-        evict_file_set.insert((*(iter.first)).second->version);
+      int version = (*(iter.first)).second->version;
+      if (!is_compaction) {
+        emb_files[version]->app_invalid_count++;
+        if (emb_files[version]->app_count >= emb_files[version]->app_invalid_count
+            && emb_files[version]->app_count / 2 < emb_files[version]->app_invalid_count)
+          evict_file_set.insert((*(iter.first)).second->version);
+      }
       EmbPosition* old_posi = (*(iter.first)).second;
       __sync_bool_compare_and_swap(&((*(iter.first)).second),
                                    (*(iter.first)).second, ep);
@@ -221,8 +227,15 @@ class SSDKV : public KVInterface<K, V> {
         std::pair<K, EmbPosition*>(key, const_cast<EmbPosition*>(ep))));
 
     if ((*(iter.first)).second != ep) {
-      if (!is_compaction)
-        evict_file_set.insert((*(iter.first)).second->version);
+      int version = (*(iter.first)).second->version;
+      if (!is_compaction) {
+        emb_files[version]->app_invalid_count++;
+        if (emb_files[version]->app_count >= emb_files[version]->app_invalid_count
+            && emb_files[version]->app_count / 2 < emb_files[version]->app_invalid_count)
+          evict_file_set.insert((*(iter.first)).second->version);
+      }
+      //if (!is_compaction)
+      //  evict_file_set.insert((*(iter.first)).second->version);
       EmbPosition* posi = (*(iter.first)).second;
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
       if (posi->flushed) {
@@ -268,7 +281,7 @@ class SSDKV : public KVInterface<K, V> {
       emb_files.emplace_back(new EmbFile(path_, current_version, buffer_size));
 
       buffer_cur = 0;
-      total_app_count = hash_size;  // important
+      //total_app_count = hash_size;  // important
       // Initialize evict_file_map
       for (auto it : evict_file_set) {
         std::vector<std::pair<K, EmbPosition*>> tmp;
@@ -286,12 +299,15 @@ class SSDKV : public KVInterface<K, V> {
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
       for (auto it : evict_file_map) {
         EmbFile* file = emb_files[it.first];
+	total_app_count -= file->app_invalid_count;
+        file->Map();
         for (auto it_vec : it.second) {
           EmbPosition* posi = it_vec.second;
-          file->Read((char*)(val->GetPtr()), val_len, posi->offset);
+          file->ReadWithoutMap((char*)(val->GetPtr()), val_len, posi->offset);
           CheckBuffer();
           SaveKV(it_vec.first, val, true);
         }
+        file->Unmap();
       }
       delete val;
     }
@@ -339,6 +355,7 @@ class SSDKV : public KVInterface<K, V> {
    public:
     std::fstream fs;
     size_t app_count;
+    size_t app_invalid_count;
     size_t version;
     std::string filepath;
     int fd;
@@ -355,16 +372,17 @@ class SSDKV : public KVInterface<K, V> {
       fs.open(filepath,
               std::ios::app | std::ios::in | std::ios::out | std::ios::binary);
       fd = open(filepath.data(), O_RDONLY);
-      file_addr =
-          (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+      //file_addr =
+      //    (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
       CHECK(fs.good());
       app_count = 0;
+      app_invalid_count = 0;
       is_deleted = false;
     }
 
     void DeleteFile() {
       if (fs.is_open()) fs.close();
-      munmap((void*)file_addr, file_size);
+      //munmap((void*)file_addr, file_size);
       close(fd);
       std::remove(filepath.c_str());
       is_deleted = true;
@@ -374,6 +392,19 @@ class SSDKV : public KVInterface<K, V> {
       if (fs.is_open()) {
         fs.flush();
       }
+    }
+
+    void Map() {
+      file_addr =
+          (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    }
+   
+    void Unmap(){
+      munmap((void*)file_addr, file_size);
+    }
+
+    void ReadWithoutMap(char* val, const size_t val_len, const size_t offset) {
+      memcpy(val, file_addr + offset, val_len); 
     }
 
     void Write(const char* val, const size_t val_len) {
@@ -388,7 +419,10 @@ class SSDKV : public KVInterface<K, V> {
     }
 
     void Read(char* val, const size_t val_len, const size_t offset) {
-      memcpy(val, file_addr + offset, val_len);
+      char* file_addr_tmp =
+          (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+      memcpy(val, file_addr_tmp + offset, val_len);
+      munmap((void*)file_addr_tmp, file_size);
     }
   };
 
@@ -406,6 +440,7 @@ class SSDKV : public KVInterface<K, V> {
   std::map<int64, std::vector<std::pair<K, EmbPosition*>>> evict_file_map;
   size_t current_version;
   size_t current_offset;
+  Allocator* alloc;
 };
 
 }  // namespace embedding
