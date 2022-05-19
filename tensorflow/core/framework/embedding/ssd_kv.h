@@ -24,6 +24,180 @@ template <class V>
 class ValuePtr;
 
 namespace embedding {
+class EmbPosition {
+ public:
+  int offset;
+  int buffer_offset;
+  size_t version;
+  bool flushed;
+  bool invalid;
+  EmbPosition(int o, size_t v, int bo, bool f)
+      : offset(o), version(v), buffer_offset(bo), flushed(f), invalid(false) {}
+  EmbPosition()
+    : offset(-1), version(-1), buffer_offset(-1), flushed(false), invalid(false) {}
+  void Print() {
+    LOG(INFO) << "EmbPosition: "
+              << "offset= " << offset << ", version= " << version
+              << ", buffer_offset= " << buffer_offset
+              << ", flushed= " << flushed;
+  }
+};
+
+class EmbFile {
+ public:
+  std::fstream fs;
+  size_t app_count;
+  size_t app_invalid_count;
+  size_t version;
+  std::string filepath;
+  int fd;
+  char* file_addr;
+  int64 file_size;
+  bool is_deleted;
+  mutex mu;
+
+  EmbFile(std::string path_, size_t ver, int64 buffer_size) {
+    version = ver;
+    file_size = buffer_size;
+    std::stringstream ss;
+    ss << std::setw(4) << std::setfill('0') << ver << ".emb";
+    filepath = path_ + ss.str();
+    fs.open(filepath,
+            std::ios::app | std::ios::in | std::ios::out | std::ios::binary);
+    fd = open(filepath.data(), O_RDONLY);
+    //file_addr =
+    //    (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    CHECK(fs.good());
+    app_count = 0;
+    app_invalid_count = 0;
+    is_deleted = false;
+  }
+
+  void DeleteFile() {
+    is_deleted = true;
+    if (fs.is_open()) fs.close();
+    //munmap((void*)file_addr, file_size);
+    close(fd);
+    std::remove(filepath.c_str());
+  }
+
+  void Flush() {
+    if (fs.is_open()) {
+      fs.flush();
+    }
+  }
+
+  void Map() {
+    file_addr =
+        (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  }
+   
+  void Unmap(){
+    munmap((void*)file_addr, file_size);
+  }
+
+  void ReadWithoutMap(char* val, const size_t val_len, const size_t offset) {
+    memcpy(val, file_addr + offset, val_len); 
+  }
+
+  void Write(const char* val, const size_t val_len) {
+    if (fs.is_open()) {
+      fs.write(val, val_len);
+    } else {
+      fs.open(filepath, std::ios::app | std::ios::in | std::ios::out |
+                            std::ios::binary);
+      fs.write(val, val_len);
+      fs.close();
+    }
+  }
+
+  void Read(char* val, const size_t val_len, const size_t offset) {
+    char* file_addr_tmp =
+       (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    memcpy(val, file_addr_tmp + offset, val_len);
+    munmap((void*)file_addr_tmp, file_size);
+  }
+};
+
+template <class K >
+class SSDIterator : public Iterator {
+ public:
+  SSDIterator(google::dense_hash_map_lockless<K, EmbPosition*>* hash_map,
+             std::vector<EmbFile*> emb_files,
+             int64 value_len,
+             char* write_buffer)
+  : emb_files_(emb_files),
+    curr_file_(0),
+    curr_vec_(0),
+    value_len_(value_len),
+    write_buffer_(write_buffer) {
+    for (auto it: *hash_map){
+      EmbPosition* posi = it.second;
+      if (!posi->invalid){
+        auto iter = file_map_.find(posi->version);
+        if (iter == file_map_.end()) {
+          std::vector<std::pair<K, EmbPosition*>> tmp;
+          file_map_[posi->version] = tmp;
+          file_id_vec_.emplace_back(posi->version);
+        }
+        file_map_[posi->version].emplace_back(it);
+      }
+    }
+    int64 f_id = file_id_vec_[0];
+    emb_files_[f_id]->Map();
+  }
+
+  virtual ~SSDIterator() {
+  }
+  virtual bool Valid() {
+    return !(curr_file_ == file_id_vec_.size());
+  }
+  virtual void SeekToFirst() {
+    curr_file_ = 0;
+    curr_vec_ = 0;
+  }
+  virtual void Next() {
+    curr_vec_++;
+    int64 f_id = file_id_vec_[curr_file_];
+    if (curr_vec_ == file_map_[f_id].size()) {
+      emb_files_[f_id]->Unmap();
+      curr_vec_ = 0;
+      curr_file_++;
+      emb_files_[file_id_vec_[curr_file_]]->Map();
+    }
+  }
+  virtual std::string Key() {
+    int64 f_id = file_id_vec_[curr_file_];
+    std::string val(sizeof(K), 'a');
+    memcpy(const_cast<char*>(val.data()), 
+            &((file_map_[f_id])[curr_vec_].first), sizeof(K));
+    return val;
+  }
+  virtual std::string Value() {
+    int64 f_id = file_id_vec_[curr_file_];
+    EmbPosition* posi = (file_map_[f_id])[curr_vec_].second;
+    char* buffer = (char*)malloc(value_len_ * sizeof(char));
+    if (posi->flushed) {
+      emb_files_[posi->version]->
+        ReadWithoutMap(buffer, value_len_, posi->offset);
+    } else {
+      memcpy(buffer, write_buffer_ + posi->buffer_offset,
+             value_len_);
+    }
+    std::string val(buffer, value_len_);
+    return val;
+  }
+
+ private:
+  int64 value_len_;
+  int64 curr_file_;
+  int64 curr_vec_;
+  char* write_buffer_;
+  std::map<int64, std::vector<std::pair<K, EmbPosition*>>> file_map_;
+  std::vector<int64> file_id_vec_;
+  std::vector<EmbFile*> emb_files_;
+};
+
 template <class K, class V>
 class SSDKV : public KVInterface<K, V> {
  public:
@@ -56,6 +230,10 @@ class SSDKV : public KVInterface<K, V> {
     write_buffer = new char[buffer_size];
     unsigned int max_key_count = 1 + int(buffer_size / val_len);
     key_buffer = new K[max_key_count];
+  }
+
+  Iterator* GetIterator() {
+    return new SSDIterator<K>(&hash_map, emb_files, val_len, write_buffer);
   }
 
   ~SSDKV() {
@@ -101,6 +279,7 @@ class SSDKV : public KVInterface<K, V> {
                val_len);
       }
       *value_ptr = val;
+      posi->invalid = true;
       return Status::OK();
     }
   }
@@ -150,19 +329,6 @@ class SSDKV : public KVInterface<K, V> {
 
   Status GetSnapshot(std::vector<K>* key_list,
                      std::vector<ValuePtr<V>*>* value_ptr_list) {
-    for (auto it : hash_map) {
-      key_list->emplace_back(it.first);
-      EmbPosition* posi = it.second;
-      ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
-      if (posi->flushed) {
-        emb_files[posi->version]->Read((char*)(val->GetPtr()), val_len,
-                                       posi->offset);
-      } else {
-        memcpy((char*)val->GetPtr(), write_buffer + posi->buffer_offset,
-               val_len);
-      }
-      value_ptr_list->emplace_back(val);
-    }
     return Status::OK();
   }
 
@@ -279,7 +445,6 @@ class SSDKV : public KVInterface<K, V> {
       ++current_version;
       current_offset = 0;
       emb_files.emplace_back(new EmbFile(path_, current_version, buffer_size));
-
       buffer_cur = 0;
       //total_app_count = hash_size;  // important
       // Initialize evict_file_map
@@ -299,7 +464,7 @@ class SSDKV : public KVInterface<K, V> {
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
       for (auto it : evict_file_map) {
         EmbFile* file = emb_files[it.first];
-	total_app_count -= file->app_invalid_count;
+        total_app_count -= file->app_invalid_count;
         file->Map();
         for (auto it_vec : it.second) {
           EmbPosition* posi = it_vec.second;
@@ -332,99 +497,6 @@ class SSDKV : public KVInterface<K, V> {
   std::function<ValuePtr<V>*(size_t)> new_value_ptr_fn_;
   int total_dims_;
   int16 open_file_count;
-
-  class EmbPosition {
-   public:
-    int offset;
-    int version;
-    int buffer_offset;
-    bool flushed;
-    EmbPosition(int o, int v, int bo, bool f)
-        : offset(o), version(v), buffer_offset(bo), flushed(f) {}
-    EmbPosition()
-        : offset(-1), version(-1), buffer_offset(-1), flushed(false) {}
-    void Print() {
-      LOG(INFO) << "EmbPosition: "
-                << "offset= " << offset << ", version= " << version
-                << ", buffer_offset= " << buffer_offset
-                << ", flushed= " << flushed;
-    }
-  };
-
-  class EmbFile {
-   public:
-    std::fstream fs;
-    size_t app_count;
-    size_t app_invalid_count;
-    size_t version;
-    std::string filepath;
-    int fd;
-    char* file_addr;
-    int64 file_size;
-    bool is_deleted;
-
-    EmbFile(std::string path_, size_t ver, int64 buffer_size) {
-      version = ver;
-      file_size = buffer_size;
-      std::stringstream ss;
-      ss << std::setw(4) << std::setfill('0') << ver << ".emb";
-      filepath = path_ + ss.str();
-      fs.open(filepath,
-              std::ios::app | std::ios::in | std::ios::out | std::ios::binary);
-      fd = open(filepath.data(), O_RDONLY);
-      //file_addr =
-      //    (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-      CHECK(fs.good());
-      app_count = 0;
-      app_invalid_count = 0;
-      is_deleted = false;
-    }
-
-    void DeleteFile() {
-      if (fs.is_open()) fs.close();
-      //munmap((void*)file_addr, file_size);
-      close(fd);
-      std::remove(filepath.c_str());
-      is_deleted = true;
-    }
-
-    void Flush() {
-      if (fs.is_open()) {
-        fs.flush();
-      }
-    }
-
-    void Map() {
-      file_addr =
-          (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    }
-   
-    void Unmap(){
-      munmap((void*)file_addr, file_size);
-    }
-
-    void ReadWithoutMap(char* val, const size_t val_len, const size_t offset) {
-      memcpy(val, file_addr + offset, val_len); 
-    }
-
-    void Write(const char* val, const size_t val_len) {
-      if (fs.is_open()) {
-        fs.write(val, val_len);
-      } else {
-        fs.open(filepath, std::ios::app | std::ios::in | std::ios::out |
-                              std::ios::binary);
-        fs.write(val, val_len);
-        fs.close();
-      }
-    }
-
-    void Read(char* val, const size_t val_len, const size_t offset) {
-      char* file_addr_tmp =
-          (char*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-      memcpy(val, file_addr_tmp + offset, val_len);
-      munmap((void*)file_addr_tmp, file_size);
-    }
-  };
 
   float compaction_ration;
   size_t max_app_count;

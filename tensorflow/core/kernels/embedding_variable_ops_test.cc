@@ -1077,6 +1077,36 @@ TEST(EmbeddingVariableTest, TestSizeDBKV) {
   LOG(INFO) << "2 size:" << hashmap->Size();
 }
 
+TEST(EmbeddingVariableTest, TestSSDIterator) {
+  KVInterface<int64, float>* hashmap = new SSDKV<int64, float>(testing::TmpDir(), ev_allocator());
+  hashmap->SetTotalDims(126);
+  ASSERT_EQ(hashmap->Size(), 0);
+  std::vector<ValuePtr<float>*> value_ptrs;
+  std::vector<int64> keys;
+  for (int64 i = 0; i < 10; ++i) {
+    ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(ev_allocator(), 126);
+    tmp->SetValue((float)i, 126);
+    value_ptrs.push_back(tmp);
+  }
+  for (int64 i = 0; i < 10; i++) {
+    hashmap->Commit(i, value_ptrs[i]);
+  }
+  embedding::Iterator* it = hashmap->GetIterator();
+  int64 index = 0;
+  for (it->SeekToFirst(); it->Valid(); it->Next()) {
+    std::string value_str, key_str;
+    key_str = it->Key();
+    int64 key = *((int64*)&key_str[0]);
+    value_str = it->Value();
+    float* val = (float*)&value_str[0];
+    ASSERT_EQ(key, index);
+    for (int i = 0; i < 126; i++)
+      ASSERT_EQ(val[i], key);
+    index++;
+    //LOG(INFO)<<*((int64*)&value_str[0]);
+  }
+}
+
 } // namespace
 } // namespace embedding
 } // namespace tensorflow

@@ -184,6 +184,7 @@ Status DumpEmbeddingValues(EmbeddingVar<K, V>* ev, const string& tensor_key, Bun
       ++iterator_size;
     }
   }
+  LOG(INFO)<<iterator_size;
 
   std::vector<std::vector<K> > key_list_parts;
   std::vector<std::vector<V* > > valueptr_list_parts;
