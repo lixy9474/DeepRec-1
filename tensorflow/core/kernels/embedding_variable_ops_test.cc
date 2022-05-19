@@ -1098,7 +1098,7 @@ TEST(EmbeddingVariableTest, TestSSDIterator) {
     key_str = it->Key();
     int64 key = *((int64*)&key_str[0]);
     value_str = it->Value();
-    float* val = (float*)&value_str[0];
+    float* val = (float*)&value_str[0] + 4;
     ASSERT_EQ(key, index);
     for (int i = 0; i < 126; i++)
       ASSERT_EQ(val[i], key);

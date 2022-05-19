@@ -143,8 +143,6 @@ class SSDIterator : public Iterator {
         file_map_[posi->version].emplace_back(it);
       }
     }
-    int64 f_id = file_id_vec_[0];
-    emb_files_[f_id]->Map();
   }
 
   virtual ~SSDIterator() {
@@ -155,6 +153,8 @@ class SSDIterator : public Iterator {
   virtual void SeekToFirst() {
     curr_file_ = 0;
     curr_vec_ = 0;
+    int64 f_id = file_id_vec_[curr_file_];
+    emb_files_[f_id]->Map();
   }
   virtual void Next() {
     curr_vec_++;
@@ -163,7 +163,8 @@ class SSDIterator : public Iterator {
       emb_files_[f_id]->Unmap();
       curr_vec_ = 0;
       curr_file_++;
-      emb_files_[file_id_vec_[curr_file_]]->Map();
+      if (curr_file_ < file_id_vec_.size())
+        emb_files_[file_id_vec_[curr_file_]]->Map();
     }
   }
   virtual std::string Key() {
@@ -176,7 +177,7 @@ class SSDIterator : public Iterator {
   virtual std::string Value() {
     int64 f_id = file_id_vec_[curr_file_];
     EmbPosition* posi = (file_map_[f_id])[curr_vec_].second;
-    char* buffer = (char*)malloc(value_len_ * sizeof(char));
+    char* buffer = (char*)malloc(value_len_);
     if (posi->flushed) {
       emb_files_[posi->version]->
         ReadWithoutMap(buffer, value_len_, posi->offset);
@@ -185,6 +186,7 @@ class SSDIterator : public Iterator {
              value_len_);
     }
     std::string val(buffer, value_len_);
+    free(buffer);
     return val;
   }
 
