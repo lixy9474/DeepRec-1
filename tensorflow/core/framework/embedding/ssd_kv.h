@@ -371,7 +371,7 @@ class SSDKV : public KVInterface<K, V> {
       if (!is_compaction) {
         emb_files[version]->app_invalid_count++;
         if (emb_files[version]->app_count >= emb_files[version]->app_invalid_count
-            && emb_files[version]->app_count / 2 < emb_files[version]->app_invalid_count)
+            && emb_files[version]->app_count / 3 < emb_files[version]->app_invalid_count)
           evict_file_set.insert((*(iter.first)).second->version);
       }
       EmbPosition* old_posi = (*(iter.first)).second;
@@ -399,7 +399,7 @@ class SSDKV : public KVInterface<K, V> {
       if (!is_compaction) {
         emb_files[version]->app_invalid_count++;
         if (emb_files[version]->app_count >= emb_files[version]->app_invalid_count
-            && emb_files[version]->app_count / 2 < emb_files[version]->app_invalid_count)
+            && emb_files[version]->app_count / 3 < emb_files[version]->app_invalid_count)
           evict_file_set.insert((*(iter.first)).second->version);
       }
       //if (!is_compaction)
