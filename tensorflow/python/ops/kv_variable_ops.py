@@ -278,7 +278,8 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
       self._max_element_size = 0
       self._false_positive_probability = -1.0
       self._counter_type = dtypes.uint64
-      
+    self._record_freq = evconfig.record_freq
+    self._record_version = evconfig.record_version
     self._l2_weight_threshold = evconfig.l2_weight_threshold
     self._storage_type = evconfig.storage_type
     self._storage_path = evconfig.storage_path
@@ -396,6 +397,8 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
                     storage_path = self._storage_path,
                     storage_size = self._storage_size,
                     default_value_dim = self._default_value_dim,
+                    record_freq = self._record_freq,
+                    record_version = self._record_version,
                     name=n))
         self._graph_element = self._handle
         self._cached_value = None

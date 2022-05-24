@@ -218,11 +218,12 @@ class StorageManager {
         if (val != nullptr && primary_val != nullptr) {
           value_list->push_back(val);
           key_list->push_back(key_list_tmp[i]);
-          if (emb_config.filter_freq != 0 || emb_config.is_multi_level) {
+          if (emb_config.filter_freq != 0 || emb_config.is_multi_level
+              || emb_config.record_freq) {
             int64 dump_freq = filter->GetFreq(key_list_tmp[i], value_ptr_list[i]);
             freq_list->push_back(dump_freq);
           }
-          if (emb_config.steps_to_live != 0) {
+          if (emb_config.steps_to_live != 0 || emb_config.record_version) {
             int64 dump_version = value_ptr_list[i]->GetStep();
             version_list->push_back(dump_version);
           }

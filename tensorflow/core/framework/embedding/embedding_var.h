@@ -100,7 +100,9 @@ class EmbeddingVar : public ResourceBase {
   Status LookupOrCreateKey(K key, ValuePtr<V>** value_ptr, int64 update_version = -1) {
     Status s = storage_manager_->GetOrCreate(key, value_ptr, emb_config_.total_num(storage_manager_->GetAllocLen()));
     TF_CHECK_OK(s);
-    if (emb_config_.is_primary() && emb_config_.steps_to_live != 0 && update_version != -1) {
+    if (emb_config_.is_primary() &&
+         (emb_config_.steps_to_live != 0 || IsRecordVersion())
+         && update_version != -1) {
       (*value_ptr)->SetStep(update_version);
     }
     return s;
@@ -180,6 +182,14 @@ class EmbeddingVar : public ResourceBase {
     return emb_config_.is_multi_level;
   }
 
+  bool IsRecordFreq() {
+    return emb_config_.record_freq;
+  }
+
+  bool IsRecordVersion() {
+    return emb_config_.record_version;
+  }
+
   std::string DebugString() const {
     return emb_config_.DebugString();
   }
@@ -206,14 +216,14 @@ class EmbeddingVar : public ResourceBase {
       ValuePtr<V>* value_ptr = nullptr;
       TF_CHECK_OK(LookupOrCreateKey(key_buff[i], &value_ptr));
       if (emb_config_.is_primary()) {
-        if (emb_config_.filter_freq != 0) {
+        if (emb_config_.filter_freq != 0 || emb_config_.record_freq) {
           if (freq_buff[i] <= emb_config_.filter_freq) {
             value_ptr->SetFreq(emb_config_.filter_freq);
           } else {
             value_ptr->SetFreq(freq_buff[i]);
           }
         }
-        if (emb_config_.steps_to_live != 0) {
+        if (emb_config_.steps_to_live != 0 || emb_config_.record_version) {
           value_ptr->SetStep(version_buff[i]);
         }
       }
