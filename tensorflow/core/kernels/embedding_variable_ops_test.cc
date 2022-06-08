@@ -152,7 +152,8 @@ TEST(TensorBundleTest, TestEVShrinkLockless) {
 
   for (int64 i=0; i < insert_num; ++i) {
     ValuePtr<float>* value_ptr = nullptr;
-    Status s = emb_var->LookupOrCreateKey(i, &value_ptr, i);
+    Status s = emb_var->LookupOrCreateKey(i, &value_ptr);
+    emb_var->UpdateVersion(value_ptr, i);
     typename TTypes<float>::Flat vflat = emb_var->flat(value_ptr);
   }
 
