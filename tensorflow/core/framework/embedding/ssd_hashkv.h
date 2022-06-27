@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "sparsehash/dense_hash_map_lockless"
+#include "sparsehash/dense_hash_set_lockless"
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/framework/embedding/value_ptr.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -195,21 +196,30 @@ class SSDHashKV : public KVInterface<K, V> {
  public:
   explicit SSDHashKV(const std::string& path, Allocator* alloc_)
   : current_version(0),
+    evict_version(0),
+    compaction_version(0),
     current_offset(0),
     buffer_cur(0),
     alloc(alloc_),
-    total_app_count(0) {
+    total_app_count(0),
+    val_len(-1) {
     path_ = io::JoinPath(
         path, "ssd_kv_" + std::to_string(Env::Default()->NowMicros()) + "_");
     hash_map.max_load_factor(0.8);
     hash_map.set_empty_key_and_value(-1, nullptr);
-    hash_map.set_counternum(1);
+    hash_map.set_counternum(16);
     hash_map.set_deleted_key(-2);
+    evict_file_set.max_load_factor(0.8);
+    evict_file_set.set_empty_key_and_value(-1, -1);
+    evict_file_set.set_counternum(1);
+    evict_file_set.set_deleted_key(-2);
     EmbFile* ef = new EmbFile(path_, current_version, buffer_size);
     emb_files.emplace_back(ef);
     new_value_ptr_fn_ = [this](size_t size) {
       return new NormalContiguousValuePtr<V>(alloc, size);
     };
+    compaction_thread = Env::Default()->StartThread(ThreadOptions(), "COMPACTION",
+                                                     [this]() { Compaction(); });
   }
 
   void SetTotalDims(int total_dims) {
@@ -219,6 +229,7 @@ class SSDHashKV : public KVInterface<K, V> {
     write_buffer = new char[buffer_size];
     unsigned int max_key_count = 1 + int(buffer_size / val_len);
     key_buffer = new K[max_key_count];
+    done = true;
   }
 
   Iterator* GetIterator() {
@@ -227,7 +238,7 @@ class SSDHashKV : public KVInterface<K, V> {
 
   ~SSDHashKV() {
     if (buffer_cur > 0) {
-      emb_files[current_version]->Write(write_buffer, buffer_cur * val_len);
+      emb_files[evict_version]->Write(write_buffer, buffer_cur * val_len);
       TF_CHECK_OK(UpdateFlushStatus());
       buffer_cur = 0;
     }
@@ -239,6 +250,9 @@ class SSDHashKV : public KVInterface<K, V> {
     }
     delete[] write_buffer;
     delete[] key_buffer;
+    shutdown_cv.notify_all();
+    shutdown = true;
+    delete compaction_thread;
   }
 
   Status UpdateFlushStatus() {
@@ -322,23 +336,59 @@ class SSDHashKV : public KVInterface<K, V> {
   void CheckBuffer() {
     size_t curr_buffer_offset = buffer_cur * val_len;
     if (curr_buffer_offset + val_len > buffer_size) {
-      emb_files[current_version]->Write(write_buffer, curr_buffer_offset);
-      emb_files[current_version]->app_count += buffer_cur;
-      emb_files[current_version]->Flush();
-      if (emb_files[current_version]->app_count >= max_app_count) {
-        ++current_version;
+      emb_files[evict_version]->Write(write_buffer, curr_buffer_offset);
+      emb_files[evict_version]->app_count += buffer_cur;
+      emb_files[evict_version]->Flush();
+      TF_CHECK_OK(UpdateFlushStatus());
+      if (emb_files[evict_version]->app_count >= max_app_count) {
+        mutex_lock l(mu);
+        evict_version = ++current_version;
         current_offset = 0;
         emb_files.emplace_back(
-            new EmbFile(path_, current_version, buffer_size));
+            new EmbFile(path_, evict_version, buffer_size));
       }
-      TF_CHECK_OK(UpdateFlushStatus());
       buffer_cur = 0;
     }
   }
 
+  Status FlushAndUpdate(char* value_buffer, K* id_buffer, EmbPosition** pos_buffer,int64& n_ids) {
+    emb_files[compaction_version]->Write(value_buffer, n_ids * val_len);
+    emb_files[compaction_version]->app_count += n_ids;
+    emb_files[compaction_version]->Flush();
+    for (int64 i = 0; i < n_ids; i++) {
+      auto iter = hash_map.find_wait_free(id_buffer[i]);
+      if (iter.first == EMPTY_KEY_) {
+        return errors::NotFound("Unable to find Key: ", id_buffer[i], " in SSDHashKV.");
+      } else {
+        size_t offset = i * val_len;
+        EmbPosition* ep = new EmbPosition(offset, compaction_version,
+                                      offset, true);
+        bool flag = __sync_bool_compare_and_swap(&(iter.second),
+                                   pos_buffer[i], ep);
+        if (!flag) {
+          emb_files[compaction_version]->app_invalid_count++;
+          if (emb_files[compaction_version]->app_count >=
+                emb_files[compaction_version]->app_invalid_count &&
+            emb_files[compaction_version]->app_count / 3 <
+                emb_files[compaction_version]->app_invalid_count)
+                    evict_file_set.insert_lockless(compaction_version);
+          delete ep;
+        } else {          
+          pos_out_of_date_compact.emplace_back(pos_buffer[i]);
+        }
+      }
+    }
+    mutex_lock l(mu);
+    n_ids = 0;
+    compaction_version = ++current_version;
+    emb_files.emplace_back(
+      new EmbFile(path_, compaction_version, buffer_size));
+    return Status::OK();
+  }
+
   void SaveKV(K key, const ValuePtr<V>* value_ptr, bool is_compaction = false) {
     size_t curr_buffer_offset = buffer_cur * val_len;
-    EmbPosition* ep = new EmbPosition(current_offset, current_version,
+    EmbPosition* ep = new EmbPosition(current_offset, evict_version,
                                       curr_buffer_offset, false);
 
     current_offset += val_len;
@@ -354,15 +404,19 @@ class SSDHashKV : public KVInterface<K, V> {
       if (!is_compaction) {
         emb_files[version]->app_invalid_count++;
         //A parameter that can be adjusted in the future
-        if (version != current_version && emb_files[version]->app_count >=
+        if (version != evict_version && emb_files[version]->app_count >=
                 emb_files[version]->app_invalid_count &&
             emb_files[version]->app_count / 3 <
                 emb_files[version]->app_invalid_count)
-          evict_file_set.insert((*(iter.first)).second->version);
+          evict_file_set.insert_lockless((*(iter.first)).second->version);
       }
-      EmbPosition* old_posi = (*(iter.first)).second;
-      __sync_bool_compare_and_swap(&((*(iter.first)).second),
-                                   (*(iter.first)).second, ep);
+      bool flag = false;
+      EmbPosition* old_posi = nullptr;
+      do {
+        EmbPosition* old_posi = (*(iter.first)).second;
+        flag = __sync_bool_compare_and_swap(&((*(iter.first)).second),
+                                   old_posi, ep);
+      } while (!flag);
       //A parameter that can be adjusted in the future
       if (pos_out_of_date.size() > cap_invalid_pos) {
         EmbPosition* posi = pos_out_of_date.front();
@@ -374,11 +428,11 @@ class SSDHashKV : public KVInterface<K, V> {
   }
 
   void SingleThreadDynamicCompaction() {
-    uint64 start, end;
     int64 hash_size = hash_map.size_lockless();
     //These parameter that can be adjusted in the future
     if (hash_size * 3 / 2 < total_app_count ||
         total_app_count - hash_size > cap_invalid_id) {
+      LOG(INFO)<<"Compaction!!!!!!";
       // delete the evict_files
       for (auto it : evict_file_map) {
         emb_files[it.first]->DeleteFile();
@@ -386,11 +440,13 @@ class SSDHashKV : public KVInterface<K, V> {
       // flush the data in buffer
       evict_file_map.clear();
       // Initialize evict_file_map
+      std::vector<int64> evict_file_ids(evict_file_set.size_lockless());
       for (auto it : evict_file_set) {
         std::vector<std::pair<K, EmbPosition*>> tmp;
         evict_file_map[it] = tmp;
+        evict_file_ids.emplace_back(it);
       }
-      evict_file_set.clear();
+
       for (auto it : hash_map) {
         EmbPosition* posi = it.second;
         auto iter = evict_file_map.find(posi->version);
@@ -400,21 +456,58 @@ class SSDHashKV : public KVInterface<K, V> {
       }
       // read embeddings and write to new file
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
+      char compact_buffer[buffer_size] = {0}; 
+      int64 n_ids = 0;
+      int64 no_use = 0;
+      unsigned int max_key_count = 1 + int(buffer_size / val_len);
+      K id_buffer[max_key_count] = {0};
+      EmbPosition* pos_buffer[max_key_count] = {0};    
       for (auto it : evict_file_map) {
         EmbFile* file = emb_files[it.first];
         total_app_count -= file->app_invalid_count;
         file->Map();
         for (auto it_vec : it.second) {
           EmbPosition* posi = it_vec.second;
-          file->ReadWithoutMap((char*)(val->GetPtr()), val_len, posi->offset);
-          CheckBuffer();
-          SaveKV(it_vec.first, val, true);
+          id_buffer[n_ids] = it_vec.first;
+          pos_buffer[n_ids] = posi;
+          file->ReadWithoutMap(compact_buffer + val_len * n_ids, val_len, posi->offset);
+          n_ids++;
+          if (n_ids == max_app_count)
+            FlushAndUpdate(compact_buffer, id_buffer, pos_buffer, n_ids);
         }
         file->Unmap();
+        evict_file_set.erase_lockless(it.first);
       }
+      FlushAndUpdate(compact_buffer, id_buffer, pos_buffer, n_ids);
       delete val;
     }
   }
+
+  void Compaction() {
+    Env* env = Env::Default();
+    const int EvictionSize = 10000;
+    if (val_len == -1) {
+      while (true) {
+        if (done) {
+          break;
+        }
+      }
+    }
+    K evic_ids[EvictionSize];
+    while (true) {
+      if (shutdown) {
+        break;
+      }
+      const int SleepMilliseconds = 1;
+      usleep(SleepMilliseconds * 1000);
+      for (auto it: pos_out_of_date_compact) {
+        delete it;
+      }
+      pos_out_of_date_compact.clear();
+      SingleThreadDynamicCompaction();
+    }
+  }
+
   std::string DebugString() const {
     return strings::StrCat("map info size:", Size(),
                           ", map info bucket_count:",
@@ -430,6 +523,8 @@ class SSDHashKV : public KVInterface<K, V> {
  private:
   size_t val_len;
   size_t current_version;
+  size_t evict_version;
+  size_t compaction_version;
   size_t current_offset;
   size_t buffer_cur;
   size_t total_app_count;
@@ -446,6 +541,7 @@ class SSDHashKV : public KVInterface<K, V> {
 
   typedef google::dense_hash_map_lockless<K, EmbPosition*> LockLessHashMap;
   LockLessHashMap hash_map;
+  mutex mu;
   static const int EMPTY_KEY_;
   static const int DELETED_KEY_;
   static const int cap_invalid_pos;
@@ -456,8 +552,16 @@ class SSDHashKV : public KVInterface<K, V> {
   std::vector<EmbFile*> emb_files;
   std::vector<EmbFile*> files_out_of_date;
   std::deque<EmbPosition*> pos_out_of_date;
-  std::set<int64> evict_file_set;
+  std::deque<EmbPosition*> pos_out_of_date_compact;
+  typedef google::dense_hash_set_lockless<K> LocklessHashSet;
+  LocklessHashSet evict_file_set;
   std::map<int64, std::vector<std::pair<K, EmbPosition*>>> evict_file_map;
+  Thread* compaction_thread;
+  condition_variable shutdown_cv;
+  bool shutdown = false;
+  bool done = false;
+  std::atomic_flag flag = ATOMIC_FLAG_INIT;
+
 };
 template <class K, class V>
 const int SSDHashKV<K, V>::EMPTY_KEY_ = -1;

@@ -1173,6 +1173,111 @@ TEST(EmbeddingVariableTest, TestLFUCache) {
   }
 }
 
+void SingleCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
+  std::vector<ValuePtr<float>*> value_ptrs;
+  for (int64 i = 0; i < keys.size(); ++i) {
+    ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(ev_allocator(), 128);
+    tmp->SetValue(float(keys[i]), 128);
+    value_ptrs.push_back(tmp);
+  }
+  ASSERT_EQ(keys.size(), value_ptrs.size());
+  uint64 start = Env::Default()->NowNanos();
+  
+  for (int64 i = 0; i < keys.size(); i++) {
+    hashmap->Commit(keys[i], value_ptrs[i]);
+  }
+  uint64 end = Env::Default()->NowNanos();
+  uint64 result_cost = end - start;
+  //LOG(INFO) << "SingleCommit time: " << result_cost << " ns";
+}
+
+TEST(KVInterfaceTest, TestSSDKVCompaction) {
+  KVInterface<int64, float>* hashmap = new SSDHashKV<int64, float>("/tmp/ssd_ut3", cpu_allocator());
+  hashmap->SetTotalDims(124);
+  ASSERT_EQ(hashmap->Size(), 0);
+  //DataLoader dl("/root/code/shuffled_sample.csv", 0, total_size);
+  std::vector<int64> ids;
+  for (int i = 0; i < 262144; i++) {
+    ids.emplace_back(i);
+  }
+  auto t1 = std::thread(SingleCommit, hashmap, ids);
+  t1.join();
+  ids.clear();
+  for (int i = 0; i < 131072; i++) {
+    ids.emplace_back(i);
+  }
+  t1 = std::thread(SingleCommit, hashmap, ids);
+  t1.join();
+  ids.clear();
+  for (int i = 262144; i < 524288; i++) {
+    ids.emplace_back(i);
+  }
+  t1 = std::thread(SingleCommit, hashmap, ids);
+  t1.join();
+  ids.clear();
+  /*for (int i = 0; i < 16384; i++) {
+    ids.emplace_back(i);
+  }
+  t1 = std::thread(BatchCommit, hashmap, ids);
+  t1.join();
+  for (int i = 0; i < 16384; i++){
+    auto r = hashmap->LookupFile(i);
+    ASSERT_EQ(1, r.first);
+    ASSERT_EQ(512*i, r.second);
+  }
+  ids.clear();
+  ids.emplace_back(16384);
+  ids.emplace_back(16385);
+  t1 = std::thread(BatchCommit, hashmap, ids, 1);
+  t1.join();
+  for (int i = 16386; i < 32768; i++) {
+    auto r = hashmap->LookupFile(i);
+    ASSERT_EQ(2, r.first);
+    ASSERT_EQ(512*(i-16385), r.second);
+  }
+  auto r = hashmap->LookupFile(16385);
+  ASSERT_EQ(2, r.first);
+  ASSERT_EQ(512*16383, r.second);
+  ids.clear();
+  for(int i = 16386; i < 32769; i++){
+    ids.emplace_back(i%32768);
+  }
+  t1 = std::thread(BatchCommit, hashmap, ids, 16383);
+  t1.join();
+  for (int i = 16386; i < 32769; i++){
+    auto r = hashmap->LookupFile(i%32768);
+    ASSERT_EQ(2, r.first);
+    ASSERT_EQ(512*(i-2), r.second);
+    //LOG(INFO)<<r.first<<", "<<r.second; 
+  }
+  ids.clear();
+  ids.emplace_back(1);
+  ids.emplace_back(2);
+  t1 = std::thread(BatchCommit, hashmap, ids, 1);
+  t1.join();
+  for(int i = 3; i < 16384; i++) {
+    auto r = hashmap->LookupFile(i);
+    ASSERT_EQ(3, r.first);
+    ASSERT_EQ((i-2)*512, r.second);
+  }
+  r = hashmap->LookupFile(0);
+  ASSERT_EQ(3, r.first);
+  ASSERT_EQ(16383*512, r.second);
+  r = hashmap->LookupFile(1);
+  ASSERT_EQ(3, r.first);
+  ASSERT_EQ(16384*512, r.second);
+  for(int i = 16385; i < 32768; i++) {
+    auto r = hashmap->LookupFile(i);
+    LOG(INFO)<<i;
+    ASSERT_EQ(3, r.first);
+    ASSERT_EQ(i*512, r.second);
+  }
+  r = hashmap->LookupFile(2);
+  ASSERT_EQ(4, r.first);
+  ASSERT_EQ(0, r.second);*/
+}
+
+
 } // namespace
 } // namespace embedding
 } // namespace tensorflow
