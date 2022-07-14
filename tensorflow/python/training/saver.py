@@ -227,10 +227,16 @@ class BaseSaverBuilder(object):
 
     for saveable in saveables:
       if isinstance(saveable, BaseSaverBuilder.EmbeddingVariableSaveable):
-        tensor_names.append(saveable.name)
-        tensors.append(saveable.handle_op)
-        tensor_slices.append("")
-        ev_key_types.append(saveable.key_type)
+        if "GPU" in saveable.var.device:
+          for spec in saveable.specs:
+            tensor_names.append(spec.name)
+            tensors.append(spec.tensor)
+            tensor_slices.append(spec.slice_spec)
+        else:
+          tensor_names.append(saveable.name)
+          tensors.append(saveable.handle_op)
+          tensor_slices.append("")
+          ev_key_types.append(saveable.key_type)
         continue
       for spec in saveable.specs:
         tensor_names.append(spec.name)
@@ -245,6 +251,7 @@ class BaseSaverBuilder(object):
     elif self._write_version == saver_pb2.SaverDef.V2:
       # "filename_tensor" is interpreted *NOT AS A FILENAME*, but as a prefix
       # of a V2 checkpoint: e.g. "/fs/train/ckpt-<step>/tmp/worker<i>-<step>".
+      print(tensors)
       return io_ops.save_v2(filename_tensor, tensor_names, tensor_slices,
                             tensors, ev_key_types, has_ev)
     else:
