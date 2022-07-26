@@ -50,7 +50,6 @@ namespace tensorflow {
 namespace {
 const int64 kEmbeddingVarUseDB = -214;
 const int64 kInitializableEmbeddingVarUseDB = -215;
-const int kSavedPartitionNum = 1000;
 }
 
 #define REGISTER_KV_VAR_HANDLE(ktype, vtype)                           \
@@ -967,7 +966,7 @@ REGISTER_KERNELS_ALL_INDEX(float);
 #undef REGISTER_KERNELS
 
 template<typename TKey, typename TValue>
-class KvResourceExportOp : public OpKernel {
+class KvResourceGeneratePartitionedTensorOp : public OpKernel {
  public:
   explicit KvResourceGeneratePartitionedTensorOp(OpKernelConstruction *ctx) : OpKernel(ctx) {}
 
@@ -988,6 +987,10 @@ class KvResourceExportOp : public OpKernel {
     Tensor *freq_output_tensor = NULL;
     Tensor *partial_offset_tensor = NULL;
 
+    std::vector<std::vector<int64>> index_list_parts;
+
+    index_list_parts.resize(kSavedPartitionNum);
+
     OP_REQUIRES_OK(ctx, ctx->allocate_output(
           0, keys.shape(), &keys_output_tensor));
     OP_REQUIRES_OK(ctx, ctx->allocate_output(
@@ -1000,25 +1003,44 @@ class KvResourceExportOp : public OpKernel {
           3, freqs.shape(),
           &freq_output_tensor));
     OP_REQUIRES_OK(ctx, ctx->allocate_output(
-         4, TensorShape({kSavedPartitionNum}),
+         4, TensorShape({kSavedPartitionNum + 1}),
          &partial_offset_tensor));
 
     auto keys_output = keys_output_tensor->template flat<TKey>();
     auto val_matrix = values_output_tensor->matrix<TValue>();
     auto versions_output = versions_output_tensor->template flat<int64>();
-    auto freq_output = freq_output_tensor->template flat<int64>();
-    auto offset_output = partial_offset_tensor->template flat<int64>();
-
-    for (int i = 0; )
+    auto freqs_output = freq_output_tensor->template flat<int64>();
+    auto offset_output = partial_offset_tensor->template flat<int32>();
+    int64 key_num = keys_flat.dimension(0);
+    for (int i = 0; i < key_num; i++) {
+      for (int partid = 0; partid < kSavedPartitionNum; partid++) {
+        if (keys_flat(i) % kSavedPartitionNum == partid) {
+            index_list_parts[partid].emplace_back(i);
+            break;
+        }
+      }
+    }
+    int32 total_count = 0;
+    offset_output(0) = 0;
+    for (int partid = 0; partid < kSavedPartitionNum; partid++) {
+      for (int i = 0; i < index_list_parts[partid].size(); i++) {
+        keys_output(total_count) = keys_flat(index_list_parts[partid][i]);
+        for (int j = 0; j < values_flat.dimension(1); j++) {
+          val_matrix(total_count, j) = values_flat(index_list_parts[partid][i], j);
+        }
+        total_count++;
+      }
+      offset_output(partid + 1) = total_count;
+    }
   }
 };
 
 #define REGISTER_KERNELS(ktype, vtype)                         \
-  REGISTER_KERNEL_BUILDER(Name("KvResourceExport")             \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceGeneratePartitionedTensor")             \
                             .Device(DEVICE_CPU)                \
                             .TypeConstraint<ktype>("Tkeys")    \
                             .TypeConstraint<vtype>("Tvalues"), \
-                          KvResourceExportOp<ktype, vtype>);
+                          KvResourceGeneratePartitionedTensorOp<ktype, vtype>);
 #define REGISTER_KERNELS_ALL_INDEX(type)                       \
   REGISTER_KERNELS(int32, type)                                \
   REGISTER_KERNELS(int64, type)

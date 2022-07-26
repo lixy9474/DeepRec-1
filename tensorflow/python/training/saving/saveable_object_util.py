@@ -175,9 +175,10 @@ class EmbeddingVariableSaveable(saveable_object.SaveableObject):
     specs = []
     if isinstance(unused_tensor, list):
       specs.append(saveable_object.SaveSpec(unused_tensor[0], "", name + "-keys", dtype=self.key_type, device=unused_tensor[0].device))
-      specs.append(saveable_object.SaveSpec(unused_tensor[1], "", name + "-values", dtype=dtypes.float32, device=unused_tensor[1].device))
+      specs.append(saveable_object.SaveSpec(unused_tensor[1], "", name + "-values", dtype=self.dtype, device=unused_tensor[1].device))
       specs.append(saveable_object.SaveSpec(unused_tensor[2], "", name + "-versions", dtype=dtypes.int64, device=unused_tensor[2].device))
-      specs.append(saveable_object.SaveSpec(unused_tensor[3], "", name + "-freqs", dtype=dtypes.int64, device=unused_tensor[2].device))
+      specs.append(saveable_object.SaveSpec(unused_tensor[3], "", name + "-freqs", dtype=dtypes.int64, device=unused_tensor[3].device))
+      specs.append(saveable_object.SaveSpec(unused_tensor[4], "", name + "-partition_offset", dtype=dtypes.int32, device=unused_tensor[4].device))
     else:
       specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-keys", dtype=self.key_type, device=var.device))
       specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-values", dtype=dtypes.float32, device=var.device))

@@ -294,8 +294,8 @@ class EmbeddingVarGPU : public ResourceBase {
                 cudaStream_t stream) {
     K* key_buff = (K*)restore_buff.key_buffer;
     V* value_buff = (V*)restore_buff.value_buffer;
-    std::vector<K> key_import(key_num);
-    std::vector<V> value_import(key_num * value_len_);
+    std::vector<K> key_import;
+    std::vector<V> value_import;
     for (auto i = 0; i < key_num; ++ i) {
       if (*(key_buff + i) % bucket_num % partition_num != partition_id) {
         LOG(INFO) << "skip EV key:" << *(key_buff + i);
@@ -308,7 +308,9 @@ class EmbeddingVarGPU : public ResourceBase {
     }
     int n = key_import.size();
     int32* item_idxs = TypedAllocator::Allocate<int32>(alloc_, n, AllocationAttributes());
-    LookupOrCreateKey(key_import.data(), item_idxs, n, stream);
+    K* key_gpu = TypedAllocator::Allocate<K>(alloc_, n, AllocationAttributes());
+    cudaMemcpy(key_gpu, key_import.data(), key_import.size() * sizeof(K), cudaMemcpyHostToDevice);
+    LookupOrCreateKey(key_gpu, item_idxs, n, stream);
     V* value_gpu = TypedAllocator::Allocate<V>(alloc_, value_import.size(), AllocationAttributes());
     cudaMemcpy(value_gpu, value_import.data(), value_import.size() * sizeof(V), cudaMemcpyHostToDevice);
     functor::KvUpdateEmb<Eigen::GpuDevice, K, V>()(key_import.data(), value_gpu, value_len_, item_idxs, n, emb_config_.emb_index, key_import.size(),
@@ -316,6 +318,7 @@ class EmbeddingVarGPU : public ResourceBase {
                                                       (emb_config_.block_num * (1 + emb_config_.slot_num)), kv_->initial_bank_size, stream);
     TypedAllocator::Deallocate(alloc_, item_idxs, n);
     TypedAllocator::Deallocate(alloc_, value_gpu, value_import.size());
+    TypedAllocator::Deallocate(alloc_, key_gpu, n);
     return Status::OK();
   }
 

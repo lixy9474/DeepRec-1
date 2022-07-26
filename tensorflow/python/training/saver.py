@@ -251,7 +251,6 @@ class BaseSaverBuilder(object):
     elif self._write_version == saver_pb2.SaverDef.V2:
       # "filename_tensor" is interpreted *NOT AS A FILENAME*, but as a prefix
       # of a V2 checkpoint: e.g. "/fs/train/ckpt-<step>/tmp/worker<i>-<step>".
-      print(tensors)
       return io_ops.save_v2(filename_tensor, tensor_names, tensor_slices,
                             tensors, ev_key_types, has_ev)
     else:

@@ -1179,6 +1179,8 @@ Status EVRestoreDynamicallyGPU(EmbeddingVarGPU<K, V>* ev,
   RestoreBuffer restore_buff;
   restore_buff.key_buffer = new char[buffer_size];
   restore_buff.value_buffer = new char[buffer_size];
+  char* part_buffer = new char[buffer_size];
+
   const cudaStream_t& stream = context->eigen_device<GPUDevice>().stream();
 
 
@@ -1192,7 +1194,9 @@ Status EVRestoreDynamicallyGPU(EmbeddingVarGPU<K, V>* ev,
     // first check whether is  old ckpt form
     string tensor_key = tensor_name + key_suffix;
     string tensor_value = tensor_name + value_suffix;
-    TensorShape key_shape, value_shape, version_shape, freq_shape;
+    string offset_tensor_name = tensor_name + part_offset_tensor_suffix;
+
+    TensorShape key_shape, value_shape, version_shape, freq_shape, part_offset_shape;
     Status st = reader->LookupTensorShape(tensor_key, &key_shape);
     if (!st.ok()) {
       VLOG(1) << "ev part " << tensor_key
@@ -1204,42 +1208,38 @@ Status EVRestoreDynamicallyGPU(EmbeddingVarGPU<K, V>* ev,
       break;
     }
 
-    reader->LookupHeader(tensor_key, sizeof(K) * key_shape.dim_size(0));
+    st = reader->LookupTensorShape(offset_tensor_name, &part_offset_shape);
     if (!st.ok()) {
       break;
     }
+
+    st = reader->LookupHeader(tensor_key, sizeof(K) * key_shape.dim_size(0));
+    if (!st.ok()) {
+      break;
+    }
+    
     st = reader->LookupHeader(tensor_value,
         sizeof(V) * value_shape.dim_size(0) * value_shape.dim_size(1));
     if (!st.ok()) {
       break;
     }
 
-    TensorShape part_offset_shape;
-    DataType part_offset_type;
-    string offset_tensor_name = tensor_name + part_offset_tensor_suffix;
-    st = reader->LookupDtypeAndShape(offset_tensor_name,
-        &part_offset_type, &part_offset_shape);
+    st = reader->LookupHeader(offset_tensor_name, sizeof(int32) * (kSavedPartitionNum + 1));
     if (!st.ok()) {
-        LOG(FATAL) <<  "EV restoring fail:" << st.ToString();
+      break;
     }
-    Tensor part_offset_tensor;
-    st = context->allocate_temp(part_offset_type,
-        part_offset_shape, &part_offset_tensor);
-    if (!st.ok()) {
-      LOG(FATAL) <<  "EV restoring fail:" << st.ToString();
-    }
-    st = reader->Lookup(offset_tensor_name, &part_offset_tensor);
-    if (!st.ok()) {
-      LOG(FATAL) <<  "EV restoring fail:" << st.ToString();
-    }
-    auto part_offset_flat = part_offset_tensor.flat<int32>();
+
+    size_t tot_part_bytes_read(0);
+    st = reader->LookupSegment(offset_tensor_name, (kSavedPartitionNum + 1) * sizeof(int32),
+        part_buffer, tot_part_bytes_read);
 
     for (size_t i = 0; i < loaded_parts.size(); i++) {
+      int32* part_offset = (int32*)part_buffer;
       int subpart_id = loaded_parts[i];
-      int subpart_offset = part_offset_flat(subpart_id);
+      int subpart_offset = part_offset[subpart_id];
 
       size_t value_unit_bytes = sizeof(V) *  value_shape.dim_size(1);
-      int64 tot_key_num = part_offset_flat(subpart_id + 1) - subpart_offset;
+      int64 tot_key_num = part_offset[subpart_id + 1] - subpart_offset;
       int64 key_part_offset = subpart_offset * sizeof(K);
       int64 value_part_offset = subpart_offset *  value_unit_bytes;
   

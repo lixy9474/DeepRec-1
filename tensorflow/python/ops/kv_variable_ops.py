@@ -907,7 +907,9 @@ def identity(var):
   if "GPU" in var.device:
     with ops.device(var.device):
       keys, values, versions, freqs =  gen_kv_variable_ops.kv_resource_export(var._handle, Tkeys=var._invalid_key_type, Tvalues=var.dtype)
-      return [keys, values, versions, freqs]
+    part_keys, part_values, part_version, part_freqs, part_offset = \
+          gen_kv_variable_ops.kv_resource_generate_partitioned_tensor(keys, values, versions, freqs)
+    return [part_keys, part_values, part_version, part_freqs, part_offset]
   else:
     return var.handle
 
