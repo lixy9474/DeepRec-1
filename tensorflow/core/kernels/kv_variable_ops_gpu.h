@@ -215,22 +215,24 @@ class EmbeddingVarGPU : public ResourceBase {
   }
 
   void GetSnapshot(K* keys, V* values, cudaStream_t stream) {
-    int32* item_idxs = TypedAllocator::Allocate<int32>(alloc_, Size(), AllocationAttributes());
-    K* keys_gpu = TypedAllocator::Allocate<K>(alloc_, Size(), AllocationAttributes());
-    V* values_gpu = TypedAllocator::Allocate<V>(alloc_, Size() * ValueLen(), AllocationAttributes());
+    if (Size() > 0) {
+      int32* item_idxs = TypedAllocator::Allocate<int32>(alloc_, Size(), AllocationAttributes());
+      K* keys_gpu = TypedAllocator::Allocate<K>(alloc_, Size(), AllocationAttributes());
+      V* values_gpu = TypedAllocator::Allocate<V>(alloc_, Size() * ValueLen(), AllocationAttributes());
 
-    functor::KvKeyGetSnapshot<Eigen::GpuDevice, K, V>()(keys_gpu, item_idxs, emb_config_.emb_index, emb_config_.primary_emb_index,
-                                                         kv_->d_existence_flag_ptrs, kv_->mem_bank_num, (emb_config_.block_num * (1 + emb_config_.slot_num)),
-                                                         kv_->initial_bank_size, kv_, Size(), stream);
-    functor::KvEmbGetSnapshot<Eigen::GpuDevice, K, V>()(keys_gpu, values_gpu, -1, value_len_, item_idxs, Size(), emb_config_.emb_index,
-                                                        kv_->d_bank_ptrs, kv_->mem_bank_num, (emb_config_.block_num * (1 + emb_config_.slot_num)),
-                                                        kv_->initial_bank_size, stream);
-    cudaMemcpy(keys, keys_gpu, Size() * sizeof(K), cudaMemcpyDeviceToHost);
-    cudaMemcpy(values, values_gpu, Size() * ValueLen()* sizeof(V), cudaMemcpyDeviceToHost);
+      functor::KvKeyGetSnapshot<Eigen::GpuDevice, K, V>()(keys_gpu, item_idxs, emb_config_.emb_index, emb_config_.primary_emb_index,
+                                                           kv_->d_existence_flag_ptrs, kv_->mem_bank_num, (emb_config_.block_num * (1 + emb_config_.slot_num)),
+                                                           kv_->initial_bank_size, kv_, Size(), stream);
+      functor::KvEmbGetSnapshot<Eigen::GpuDevice, K, V>()(keys_gpu, values_gpu, -1, value_len_, item_idxs, Size(), emb_config_.emb_index,
+                                                          kv_->d_bank_ptrs, kv_->mem_bank_num, (emb_config_.block_num * (1 + emb_config_.slot_num)),
+                                                          kv_->initial_bank_size, stream);
+      cudaMemcpy(keys, keys_gpu, Size() * sizeof(K), cudaMemcpyDeviceToHost);
+      cudaMemcpy(values, values_gpu, Size() * ValueLen()* sizeof(V), cudaMemcpyDeviceToHost);
     
-    TypedAllocator::Deallocate(alloc_, item_idxs, Size());
-    TypedAllocator::Deallocate(alloc_, keys_gpu, Size());
-    TypedAllocator::Deallocate(alloc_, values_gpu, Size() * ValueLen());
+      TypedAllocator::Deallocate(alloc_, item_idxs, Size());
+      TypedAllocator::Deallocate(alloc_, keys_gpu, Size());
+      TypedAllocator::Deallocate(alloc_, values_gpu, Size() * ValueLen());
+    }
   }
 
   int64 Size() const {
