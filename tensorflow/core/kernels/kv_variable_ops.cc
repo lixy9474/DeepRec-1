@@ -47,6 +47,8 @@ limitations under the License.
 
 namespace tensorflow {
 
+typedef Eigen::GpuDevice GPUDevice;
+
 namespace {
 const int64 kEmbeddingVarUseDB = -214;
 const int64 kInitializableEmbeddingVarUseDB = -215;
@@ -663,6 +665,7 @@ class KvResourceGatherGPUOp : public OpKernel {
             default_values[i] = default_v;
             ids[i] = indices_flat(i);
           }
+          
           ev->LookupWithFreqBatch(ids, init_flags, copyback_flags,
               memcpy_address, start, limit);
         };
@@ -671,9 +674,11 @@ class KvResourceGatherGPUOp : public OpKernel {
         Shard(8, worker_threads->workers, indices_size,
             slice_bytes, do_work);
 
-        ev->InitailizeEmbeddingOnGPU(ids, indices_size,
+        const Device& d = c->eigen_device<Device>();
+
+        ev->InitializeEmbeddingOnGPU(ids, indices_size,
                                      init_flags, memcpy_address,
-                                     default_values);
+                                     default_values, d);
         ev->CopyBackToGPU(ids, indices_size, copyback_flags, memcpy_address);
 
         ev->CreateGPUBatch(out_base, default_values, indices_size,

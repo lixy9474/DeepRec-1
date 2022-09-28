@@ -226,7 +226,7 @@ class EmbeddingVar : public ResourceBase {
   }
 
   void InitailizeEmbeddingOnGPU(K* keys, int64 size, bool* init_flags,
-       V** memcpy_address, V** default_values) {
+       V** memcpy_address, V** default_values, const Device& d) {
     V** dev_default_value_address, **default_value_address;
     V** dev_value_address, **value_address;
     bool* dev_init_flags;
