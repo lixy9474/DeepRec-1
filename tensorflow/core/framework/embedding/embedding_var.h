@@ -154,7 +154,7 @@ class EmbeddingVar : public ResourceBase {
   }
 
   Status LookupOrCreateKey(K key, ValuePtr<V>** value_ptr,
-      int64 update_version, bool &need_copyback) {
+      int64 update_version, int8 &need_copyback) {
     Status s = storage_manager_->GetOrCreate(key, value_ptr,
         emb_config_.total_num(storage_manager_->GetAllocLen()), need_copyback);
     TF_CHECK_OK(s);
@@ -201,7 +201,7 @@ class EmbeddingVar : public ResourceBase {
     add_freq_fn_(value_ptr, count, emb_config_.filter_freq);
   }
 
-  void LookupWithFreqBatch(K* keys, bool *init_flags, bool *copyback_flags,
+  void LookupWithFreqBatch(K* keys, bool *init_flags, int8 *copyback_flags,
       V** memcpy_address, int start, int limit) {
     ValuePtr<V>* value_ptr = nullptr;
     for (int i = start; i < limit; i++) {
@@ -211,6 +211,9 @@ class EmbeddingVar : public ResourceBase {
       } else {
         //memcpy_address[i] = LookupOrCreateEmb(value_ptr, init_flags[i]);
         memcpy_address[i] = value_ptr->GetValue(0,0);
+        if (copyback_flags[i] == 2) {
+          delete value_ptr;
+        }
       }
       value_ptr->AddFreq();
     }
@@ -277,7 +280,7 @@ class EmbeddingVar : public ResourceBase {
     }
   }
 
-  void CopyBackToGPU(K* keys, int64 size, bool* copyback_flags,
+  void CopyBackToGPU(K* keys, int64 size, int8* copyback_flags,
       V** memcpy_address) {
     size_t value_len = emb_config_.total_num(storage_manager_->GetAllocLen());
     V* memcpy_buffer_gpu;
@@ -382,9 +385,8 @@ class EmbeddingVar : public ResourceBase {
     return storage_manager_->IsMultiLevel();
   }
 
-  bool IsHBMDRAM() {
-    return embedding::StorageType::HBM_DRAM ==
-      storage_manager_->GetStorageType();
+  bool IsUseHBM() {
+    return storage_manager_->IsUseHBM();
   }
 
   void InitStorageCacheStrategy(embedding::CacheStrategy cache_strategy) {

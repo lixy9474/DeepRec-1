@@ -228,7 +228,7 @@ class KvSparseApplyAdagradGPUOp : public OpKernel {
 
     if (N > 0) {
       if (inner_dim > 0) {
-        if (var->IsHBMDRAM()) {
+        if (var->IsUseHBM()) {
           auto indices_flat = indices.flat<TKey>();
           auto grad_flat = grad.flat_outer_dims<T>();
           T lr_scalar = lr.scalar<T>()();

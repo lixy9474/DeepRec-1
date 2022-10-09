@@ -16,6 +16,7 @@
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/lib/core/status.h"
 
+#define MAX_STORAGE_LEVEL 4
 namespace tensorflow {
 template <class V>
 class ValuePtr;
@@ -61,6 +62,7 @@ struct StorageConfig {
   CacheStrategy cache_strategy;
 };
 
+
 template <class K, class V>
 class StorageManager {
  public:
@@ -70,18 +72,18 @@ class StorageManager {
 : hash_table_count_(0),
   name_(name),
   sc_(sc),
-  cache_(nullptr),
-  cache_capacity_(cap),
-  eviction_thread_(nullptr),
   total_dims_(0),
   alloc_len_(0),
-  is_multi_level_(false) {}
+  is_multi_level_(false),
+  is_use_hbm_(false) {}
 
   ~StorageManager() {
     for (auto kv: kvs_) {
       delete kv.first;
     }
-    delete cache_;
+    for (auto cache: caches_) {
+      delete cache;
+    }
   }
 
   Status Init(Allocator* alloc_ = nullptr) {
@@ -168,6 +170,21 @@ class StorageManager {
 #endif  // TENSORFLOW_USE_GPU_EV
 #endif  // GOOGLE_CUDA
         break;
+      case StorageType::HBM_DRAM_SSDHASH:
+#if GOOGLE_CUDA
+#if !TENSORFLOW_USE_GPU_EV
+        new_value_ptr_fn_ = [] (Allocator* allocator, size_t size) {
+          return new NormalGPUValuePtr<V>(allocator, size); };
+        LOG(INFO) << "StorageManager::HBM_DRAM_SSDHASH: " << name_;
+        kvs_.emplace_back(std::make_pair(
+              new LocklessHashMap<K, V>(), alloc_));
+        kvs_.emplace_back(std::make_pair(
+              new LocklessHashMapCPU<K, V>(), ev_allocator()));
+        kvs_.emplace_back(std::make_pair(
+              new SSDHashKV<K, V>(sc_.path, ev_allocator()), ev_allocator()));
+#endif  // TENSORFLOW_USE_GPU_EV
+#endif  // GOOGLE_CUDA
+        break;
       default:
         VLOG(1) << "StorageManager::default" << name_;
         kvs_.emplace_back(std::make_pair(
@@ -178,13 +195,23 @@ class StorageManager {
     if (sc_.type == embedding::DRAM_PMEM ||
         sc_.type == embedding::DRAM_SSDHASH ||
         sc_.type == embedding::HBM_DRAM ||
-        sc_.type == embedding::DRAM_LEVELDB) {
+        sc_.type == embedding::DRAM_LEVELDB ||
+        sc_.type == embedding::HBM_DRAM_SSDHASH) {
       is_multi_level_ = true;
     }
-    hash_table_count_ = kvs_.size();
-    CHECK(2 >= hash_table_count_)
-        << "Not support multi-level(>2) embedding.";
 
+    if (sc_.type == embedding::HBM_DRAM ||
+        sc_.type == embedding::HBM_DRAM_SSDHASH) {
+      is_use_hbm_ = true;
+    }
+
+    hash_table_count_ = kvs_.size();
+    if (hash_table_count_ > 1) {
+      for (int i = 0; i < hash_table_count_ - 1; i++) {
+        dones_[i] = false;
+        shutdowns_[i] = false;
+      }
+    }
     return Status::OK();
   }
 
@@ -207,9 +234,13 @@ class StorageManager {
         kvs_[1].first->SetTotalDims(total_dims_);
       }
       if (hash_table_count_ > 1) {
-        cache_capacity_ = sc_.size[0] / (total_dims_ * sizeof(V));
-        done_ = true;
-        LOG(INFO) << "Cache cache_capacity: " << cache_capacity_;
+        for (int i = 0; i < hash_table_count_ - 1; i++) {
+          cache_capacities_.emplace_back(sc_.size[i] / (total_dims_ * sizeof(V)));
+          dones_[i] = true;
+          LOG(INFO) << "capacity of level "<< i
+                    <<" of "<<name_<<" : "
+                    << cache_capacities_[i];
+        }
       }
     }
     flag_.clear(std::memory_order_release);
@@ -218,18 +249,22 @@ class StorageManager {
   void InitCacheStrategy(embedding::CacheStrategy cache_strategy) {
     sc_.cache_strategy = cache_strategy;
     if (hash_table_count_ > 1) {
-      if (sc_.cache_strategy == CacheStrategy::LRU) {
-        LOG(INFO)<<" Use StorageManager::LRU in multi-tier EV "<< name_;
-        cache_ = new LRUCache<K>();
-      } else {
-        LOG(INFO) << "Use StorageManager::LFU in multi-tier EV " << name_;
-        cache_ = new LFUCache<K>();
+      for (int i = 0; i < hash_table_count_ - 1; i++) {
+        if (sc_.cache_strategy == CacheStrategy::LRU) {
+          LOG(INFO) << "Use StorageManager::LRU in level "
+                    <<i<<" of multi-tier EV " << name_;
+          caches_.emplace_back(new LRUCache<K>());
+        } else {
+          LOG(INFO) << "Use StorageManager::LFU in level "
+                    <<i<<" of multi-tier EV " << name_;
+          caches_.emplace_back(new LFUCache<K>());
+        }
+        eviction_threads_.emplace_back(Env::Default()->StartThread(
+            ThreadOptions(), "EV_Eviction", [this, i]() { BatchEviction(i); })); 
       }
-      eviction_thread_ = Env::Default()->StartThread(
-          ThreadOptions(), "EV_Eviction", [this]() { BatchEviction(); });
       thread_pool_.reset(
-          new thread::ThreadPool(Env::Default(), ThreadOptions(),
-            "MultiLevel_Embedding_Cache", 2, /*low_latency_hint=*/false));
+            new thread::ThreadPool(Env::Default(), ThreadOptions(),
+              "MultiLevel_Embedding_Cache", hash_table_count_, /*low_latency_hint=*/false));
     }
   }
 
@@ -253,6 +288,10 @@ class StorageManager {
     return sc_.type;
   }
 
+  bool IsUseHBM() {
+    return is_use_hbm_;
+  }
+
   std::string GetStoragePath() {
     return sc_.path;
   }
@@ -273,8 +312,6 @@ class StorageManager {
                           " Storage Path: ", sc_.path,
                           " Storage Capacity: ", sc_.size);
   }
-
-
 
   void Schedule(std::function<void()> fn) {
     if (hash_table_count_ > 1) {
@@ -308,7 +345,7 @@ class StorageManager {
       *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
     }
 
-    if (sc_.type == StorageType::HBM_DRAM && level && found) {
+    if (is_use_hbm_ && level && found) {
 #if GOOGLE_CUDA
 #if !TENSORFLOW_USE_GPU_EV
       ValuePtr<V>* gpu_value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
@@ -316,6 +353,10 @@ class StorageManager {
       V* gpu_data_address = gpu_value_ptr->GetValue(0, 0);
       cudaMemcpy(gpu_data_address, cpu_data_address,
           size * sizeof(V), cudaMemcpyHostToDevice);
+      if (sc_.type == StorageType::HBM_DRAM_SSDHASH && level == 2) {
+        (*value_ptr)->Destroy(kvs_[level].second);
+        delete *value_ptr;
+      }
       *value_ptr = gpu_value_ptr;
 #endif  // TENSORFLOW_USE_GPU_EV
 #endif  // GOOGLE_CUDA
@@ -334,10 +375,10 @@ class StorageManager {
   }
 
   Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
-      size_t size, bool &need_copyback) {
+      size_t size, int8 &need_copyback) {
     bool found = false;
     int level = 0;
-    need_copyback = false;
+    need_copyback = 0;
 
     for (; level < hash_table_count_; ++level) {
       Status s = kvs_[level].first->Lookup(key, value_ptr);
@@ -350,8 +391,8 @@ class StorageManager {
       *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
     }
 
-    if (sc_.type == StorageType::HBM_DRAM && level && found) {
-      need_copyback = true;
+    if (is_use_hbm_ && level && found) {
+      need_copyback = level;
     }
     if ( (level || !found ) && !need_copyback) {
       Status s = kvs_[0].first->Insert(key, *value_ptr);
@@ -368,7 +409,7 @@ class StorageManager {
 
 #if GOOGLE_CUDA
 #if !TENSORFLOW_USE_GPU_EV
-  void CopyBackToGPU(int total, K* keys, int64 size, bool* copyback_flags,
+  void CopyBackToGPU(int total, K* keys, int64 size, int8* copyback_flags,
       V** memcpy_address, size_t value_len, int *copyback_cursor,
       ValuePtr<V> **gpu_value_ptrs, V* memcpy_buffer_gpu){
     auto memcpy_buffer_cpu = (V*)malloc(total * value_len * sizeof(V));
@@ -384,6 +425,10 @@ class StorageManager {
         V* gpu_data_address = gpu_value_ptr->GetValue(0, 0);
         memcpy(memcpy_buffer_cpu + j * value_len,
             cpu_data_address, value_len * sizeof(V));
+        if (copyback_flags[i] == 2) {
+          ev_allocator()->DeallocateRaw((char *)memcpy_address[i]
+                                          - sizeof(FixedLengthHeader));
+        }
         copyback_cursor[j] = i;
         gpu_value_ptrs[j] = gpu_value_ptr;
         j++;
@@ -413,7 +458,11 @@ class StorageManager {
   }
 
   int64 CacheSize() const {
-    return cache_capacity_;
+    return cache_capacities_[0];
+  }
+
+  int64 CacheSize(int i) const {
+    return cache_capacities_[i];
   }
 
   Status GetSnapshot(std::vector<K>* key_list,
@@ -431,7 +480,9 @@ class StorageManager {
       const EmbeddingConfig& emb_config,
       EmbeddingFilter<K, V, EmbeddingVar<K, V>>* filter,
       embedding::Iterator** it) {
+    int level = 0;
     for (auto kv : kvs_) {
+      mutex_lock l(mus_[level]);
       std::vector<ValuePtr<V>* > value_ptr_list;
       std::vector<K> key_list_tmp;
       TF_CHECK_OK(kv.first->GetSnapshot(&key_list_tmp, &value_ptr_list));
@@ -466,13 +517,15 @@ class StorageManager {
           value_list->emplace_back(nullptr);
         }
       }
+      level++;
     }
     return key_list->size();
   }
 
   Status Shrink(const EmbeddingConfig& emb_config, int64 value_len) {
-    mutex_lock l(mu_);
+    int level = 0;
     for (auto kv : kvs_) {
+      mutex_lock l(mus_[level]);
       std::vector<K> key_list;
       std::vector<ValuePtr<V>* > value_ptr_list;
       TF_CHECK_OK(kv.first->GetSnapshot(&key_list, &value_ptr_list));
@@ -498,13 +551,15 @@ class StorageManager {
         delete it.second;
         kv.first->Remove(it.first);
       }
+      level++;
     }
     return Status::OK();
   }
 
   Status Shrink(int64 gs, int64 steps_to_live) {
-    mutex_lock l(mu_);
+    int level = 0;
     for (auto kv : kvs_) {
+      mutex_lock l(mus_[level]);
       std::vector<K> key_list;
       std::vector<ValuePtr<V>* > value_ptr_list;
       TF_CHECK_OK(kv.first->GetSnapshot(&key_list, &value_ptr_list));
@@ -526,24 +581,42 @@ class StorageManager {
         delete it.second;
         kv.first->Remove(it.first);
       }
+      level++;
     }
     return Status::OK();
   }
 
   Status Destroy() {
-    if (eviction_thread_) {
-      mutex_lock l(mu_);
-      shutdown_cv_.notify_all();
-      shutdown_ = true;
+    if (eviction_threads_.size()) {
+      for (int i = 0; i < eviction_threads_.size(); i++) {
+        {
+          mutex_lock l(mus_[i]);
+          shutdown_cvs_[i].notify_all();
+          shutdowns_[i] = true;
+        }
+        delete eviction_threads_[i];
+      }
     }
-    delete eviction_thread_;
-    mutex_lock l(mu_);
     std::vector<K> key_list;
     std::vector<ValuePtr<V>* > value_ptr_list;
-    kvs_[0].first->GetSnapshot(&key_list, &value_ptr_list);
-    for (auto value_ptr : value_ptr_list) {
-      value_ptr->Destroy(kvs_[0].second);
-      delete value_ptr;
+    {
+      mutex_lock l(mus_[0]);
+      kvs_[0].first->GetSnapshot(&key_list, &value_ptr_list);
+      for (auto value_ptr : value_ptr_list) {
+        value_ptr->Destroy(kvs_[0].second);
+        delete value_ptr;
+      }
+    }
+    // destory DRAM hash table
+    if (is_use_hbm_) {
+      key_list.clear();
+      value_ptr_list.clear();
+      mutex_lock l(mus_[1]);
+      kvs_[1].first->GetSnapshot(&key_list, &value_ptr_list);
+      for (auto value_ptr : value_ptr_list) {
+        value_ptr->Destroy(kvs_[1].second);
+        delete value_ptr;
+      }
     }
     return Status::OK();
   }
@@ -557,7 +630,11 @@ class StorageManager {
   }
 
   BatchCache<K>* Cache() {
-    return cache_;
+    if (caches_.size() > 0) {
+      return caches_[0];
+    } else {
+      return nullptr;
+    }
   }
 
   Status Commit(K key, const ValuePtr<V>* value_ptr) {
@@ -584,54 +661,67 @@ class StorageManager {
     }
   }
 
-  mutex* get_mutex() { return &mu_; }
+  void iterator_mutex_lock() {
+    mus_[hash_table_count_ - 1].lock();
+  }
+
+  void iterator_mutex_unlock() {
+    mus_[hash_table_count_ - 1].unlock();
+  }
 
  private:
-  void BatchEviction() {
+  void BatchEviction(int level) {
     Env* env = Env::Default();
     const int EvictionSize = 10000;
-    if (cache_capacity_ == -1) {
+    if (cache_capacities_[level] == -1) {
       while (true) {
-        mutex_lock l(mu_);
-        if (done_) {
+        mutex_lock l(mus_[level]);
+        if (dones_[level]) {
           break;
         }
       }
     }
     K evic_ids[EvictionSize];
-    while (!shutdown_) {
-      mutex_lock l(mu_);
+    while (!shutdowns_[level]) {
+      mutex_lock l(mus_[level]);
       // add WaitForMilliseconds() for sleep if necessary
       const int kTimeoutMilliseconds = 1;
-      WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
-      for (int i = 0; i < value_ptr_out_of_date_.size(); i++) {
-        value_ptr_out_of_date_[i]->Destroy(kvs_[0].second);
-        delete value_ptr_out_of_date_[i];
+      WaitForMilliseconds(&l, &shutdown_cvs_[level], kTimeoutMilliseconds);
+      for (int i = 0; i < value_ptr_out_of_date_[level].size(); i++) {
+        value_ptr_out_of_date_[level][i]->Destroy(kvs_[level].second);
+        delete value_ptr_out_of_date_[level][i];
       }
-      value_ptr_out_of_date_.clear();
-      int cache_count = cache_->size();
-      if (cache_count > cache_capacity_) {
+      value_ptr_out_of_date_[level].clear();
+      int cache_count = caches_[level]->size();
+      if (cache_count > cache_capacities_[level]) {
         // eviction
-        int k_size = cache_count - cache_capacity_;
+        int k_size = cache_count - cache_capacities_[level];
         k_size = std::min(k_size, EvictionSize);
-        size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
+        size_t true_size = caches_[level]->get_evic_ids(evic_ids, k_size);
         ValuePtr<V>* value_ptr;
-        if (sc_.type == StorageType::HBM_DRAM) {
+        if (is_use_hbm_ && level == 0) {
           std::vector<K> keys;
           std::vector<ValuePtr<V>*> value_ptrs;
-          LOG(INFO) << "Cache_count: " << cache_count;
+          std::vector<int64> freqs;
+          std::vector<int64> versions;
           timespec start, end;
 
           clock_gettime(CLOCK_MONOTONIC, &start);
           for (int64 i = 0; i < true_size; ++i) {
-            if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
-              TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
+            if (kvs_[level].first->Lookup(evic_ids[i], &value_ptr).ok()) {
+              TF_CHECK_OK(kvs_[level].first->Remove(evic_ids[i]));
               keys.emplace_back(evic_ids[i]);
               value_ptrs.emplace_back(value_ptr);
+              freqs.emplace_back(value_ptr->GetFreq());
+              versions.emplace_back(value_ptr->GetStep());
+              value_ptr_out_of_date_[level].emplace_back(value_ptr);
             }
           }
-
-          BatchCommit(keys, value_ptrs);
+          kvs_[level + 1].first->BatchCommit(keys, value_ptrs);
+          if (level + 1 > 0 && level + 1 < hash_table_count_ -1) {
+            caches_[level + 1]->add_to_rank(keys.data(), keys.size(),
+                                        freqs.data(), versions.data());
+          }
           clock_gettime(CLOCK_MONOTONIC, &end);
           LOG(INFO) << "Total Evict Time: "
                     << (double)(end.tv_sec - start.tv_sec) *
@@ -640,10 +730,10 @@ class StorageManager {
                        EnvTime::kMillisToNanos<< "ms";
         } else {
           for (int64 i = 0; i < true_size; ++i) {
-            if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
-              TF_CHECK_OK(kvs_[1].first->Commit(evic_ids[i], value_ptr));
-              TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
-              value_ptr_out_of_date_.emplace_back(value_ptr);
+            if (kvs_[level].first->Lookup(evic_ids[i], &value_ptr).ok()) {
+              TF_CHECK_OK(kvs_[level + 1].first->Commit(evic_ids[i], value_ptr));
+              TF_CHECK_OK(kvs_[level].first->Remove(evic_ids[i]));
+              value_ptr_out_of_date_[level].emplace_back(value_ptr);
             }
           }
         }
@@ -655,23 +745,24 @@ class StorageManager {
   int32 hash_table_count_;
   std::string name_;
   std::vector<std::pair<KVInterface<K, V>*, Allocator*>> kvs_;
-  std::vector<ValuePtr<V>*> value_ptr_out_of_date_;
+  std::vector<ValuePtr<V>*> value_ptr_out_of_date_[MAX_STORAGE_LEVEL];
   std::function<ValuePtr<V>*(Allocator*, size_t)> new_value_ptr_fn_;
   StorageConfig sc_;
   bool is_multi_level_;
+  bool is_use_hbm_;
 
   int64 alloc_len_;
   int64 total_dims_;
 
   std::unique_ptr<thread::ThreadPool> thread_pool_;
-  Thread* eviction_thread_;
-  BatchCache<K>* cache_;
-  int64 cache_capacity_;
-  mutex mu_;
-  condition_variable shutdown_cv_;
-  volatile bool shutdown_ GUARDED_BY(mu_) = false;
+  std::vector<Thread*> eviction_threads_;
+  std::vector<BatchCache<K>*> caches_;
+  std::vector<int64> cache_capacities_;
+  mutex mus_[MAX_STORAGE_LEVEL];
+  condition_variable shutdown_cvs_[MAX_STORAGE_LEVEL];
+  volatile bool shutdowns_[MAX_STORAGE_LEVEL];
 
-  volatile bool done_ = false;
+  volatile bool dones_[MAX_STORAGE_LEVEL];
   std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
 
 };

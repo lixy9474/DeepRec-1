@@ -693,9 +693,9 @@ class KvResourceGatherGPUOp : public OpKernel {
               "MultiLevel EV's Cache size ", ev->CacheSize(),
               " should large than IDs in batch ", N));
       const size_t slice_bytes = slice_elems * sizeof(TValue);
-      if (ev->IsHBMDRAM()) {
+      if (ev->IsUseHBM()) {
         bool* init_flags = new bool[indices_size]();
-        bool* copyback_flags = new bool[indices_size]();
+        int8* copyback_flags = new int8[indices_size]();
         TValue** memcpy_address = new TValue*[indices_size];
         TValue** default_values = new TValue*[indices_size];
         TKey* ids = new TKey[indices_size];
