@@ -95,6 +95,7 @@ class LocklessHashMapCPU : public KVInterface<K, V> {
     return Status::OK();
   }
 
+#if GOOGLE_CUDA
   Status BatchCommit(const std::vector<K>& keys,
                      const std::vector<ValuePtr<V>*>& value_ptrs) {
     int batch_size = keys.size();
@@ -145,6 +146,7 @@ class LocklessHashMapCPU : public KVInterface<K, V> {
     delete []value_address;
     return Status::OK();
   }
+#endif //GOOGLE_CUDA
 
   Status GetSnapshot(std::vector<K>* key_list,
       std::vector<ValuePtr<V>* >* value_ptr_list) {

@@ -217,16 +217,17 @@ class EmbeddingVar : public ResourceBase {
         init_flags, value_len);
   }
 
-#if GOOGLE_CUDA
 #if !TENSORFLOW_USE_GPU_EV
   void CreateGPUBatch(V* val_base, V** default_values, int64 size,
-      int64 slice_elems, bool* init_flags, V** memcpy_address) {
+      int64 slice_elems, bool* init_flags, V** memcpy_address,
+      const Device& d, stream_executor::Stream* stream) {
     filter_->CreateGPUBatch(val_base, default_values, size,
-        slice_elems, value_len_, init_flags, memcpy_address);
+        slice_elems, value_len_, init_flags, memcpy_address, d, stream);
   }
 
-  void InitailizeEmbeddingOnGPU(K* keys, int64 size, bool* init_flags,
-       V** memcpy_address, V** default_values, const Device& d) {
+  void InitializeEmbeddingOnGPU(K* keys, int64 size, bool* init_flags,
+       V** memcpy_address, V** default_values, const Device& d, 
+       stream_executor::Stream* stream) {
     V** dev_default_value_address, **default_value_address;
     V** dev_value_address, **value_address;
     bool* dev_init_flags;
@@ -252,19 +253,21 @@ class EmbeddingVar : public ResourceBase {
         value_address[i] = memcpy_address[init_cursor[i]];
         default_value_address[i] = default_values[init_cursor[i]];
       }
-      cudaMemcpy(dev_value_address, value_address, sizeof(V*) * total,
-          cudaMemcpyHostToDevice);
-      cudaMemcpy(dev_default_value_address, default_value_address,
-                 sizeof(V*) * total, cudaMemcpyHostToDevice);
+      GpuLaunchConfig config = GetGpuLaunchConfig(total, d);
+      se::DeviceMemoryBase dev_value_ptr(dev_value_address, sizeof(V*) * total);
+      se::DeviceMemoryBase dev_default_value_ptr(dev_default_value_address,
+                                                 sizeof(V*) * total);
+      stream->ThenMemcpy(dev_value_ptr, value_address, sizeof(V*) * total);
+      stream->ThenMemcpy(dev_default_value_ptr,
+                         default_value_address, sizeof(V*) * total);
       int block_dim = 128;
       void* args[] = {(void*)&dev_default_value_address,
                        (void*)&dev_value_address,
                        (void*)&value_len_,
                        (void*)&total};
-      cudaLaunchKernel((void *)CopyEmbedding<V>,
-                       (total + block_dim - 1) / block_dim * value_len_,
-                       block_dim, args, 0, NULL);
-      cudaDeviceSynchronize();
+      TF_CHECK_OK(GpuLaunchKernel((void *)CopyEmbedding<V>,
+                                  config.block_count, config.thread_per_block,
+                                  0, d.stream(), args);
       TypedAllocator::Deallocate(alloc_, dev_value_address, total);
       TypedAllocator::Deallocate(alloc_, dev_default_value_address, total);
       free(value_address);
@@ -273,7 +276,7 @@ class EmbeddingVar : public ResourceBase {
   }
 
   void CopyBackToGPU(K* keys, int64 size, bool* copyback_flags,
-      V** memcpy_address) {
+      V** memcpy_address, const Device& d, stream_executor::Stream* stream) {
     size_t value_len = emb_config_.total_num(storage_manager_->GetAllocLen());
     V* memcpy_buffer_gpu;
     V** dev_value_address, **value_address;
@@ -285,32 +288,32 @@ class EmbeddingVar : public ResourceBase {
     }
     int *copyback_cursor = new int[total]();
     ValuePtr<V>** gpu_value_ptrs = new ValuePtr<V>* [total];
-    cudaMalloc(&memcpy_buffer_gpu, total * value_len * sizeof(V));
+    memcpy_buffer_gpu = TypedAllocator::Allocate<V>(alloc_,
+              total * value_len, AllocationAttributes());
 
     storage_manager_->CopyBackToGPU(total, keys, size, copyback_flags, 
         memcpy_address, value_len, copyback_cursor, gpu_value_ptrs,
         memcpy_buffer_gpu);
 
     value_address = (V**)malloc(sizeof(V*) * total);
-    cudaMalloc(&dev_value_address, sizeof(V*) * total);
-
+    dev_value_address = TypedAllocator::Allocate<V*>(alloc_,
+              total, AllocationAttributes());
     for (int i = 0;i < total;i++) {
       bool init;
       memcpy_address[copyback_cursor[i]] = LookupOrCreateEmb(
           gpu_value_ptrs[i], init);
       value_address[i] = memcpy_address[copyback_cursor[i]];
     }
-
-    cudaMemcpy(dev_value_address, value_address, sizeof(V*) * total,
-        cudaMemcpyHostToDevice);
+    GpuLaunchConfig config = GetGpuLaunchConfig(total * value_len, d);
+    se::DeviceMemoryBase dev_value_ptr(dev_value_address, sizeof(V*) * total);
+    strem->ThenMemcpy(dev_value_ptr, value_address, sizeof(V*) * total);
     int block_dim = 128;
-    void* args[] = { (void*)&dev_value_address,
+    void* args[] = {(void*)&dev_value_address,
       (void*)&memcpy_buffer_gpu, (void*)&value_len, (void*)&total};
 
-    cudaLaunchKernel((void *)BatchUnpack<V>,
-        (total + block_dim - 1) / block_dim * value_len, block_dim,
-        args, 0, NULL);
-    cudaDeviceSynchronize();
+    TF_CHECK_OK(GpuLaunchKernel((void *)BatchUnpack<V>,
+                                 config.block_count, config.thread_per_block,
+                                 0, d.stream(), args);
 
     cudaFree(dev_value_address);
     cudaFree(memcpy_buffer_gpu);
@@ -318,7 +321,6 @@ class EmbeddingVar : public ResourceBase {
     delete []gpu_value_ptrs;
   }
 #endif  // TENSORFLOW_USE_GPU_EV
-#endif  // GOOGLE_CUDA
 
   V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, const V* default_v) {
     return value_ptr->GetOrAllocate(alloc_, value_len_, default_v,

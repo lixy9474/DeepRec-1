@@ -10,6 +10,9 @@
 #if GOOGLE_CUDA
 #if !TENSORFLOW_USE_GPU_EV
 #include "tensorflow/core/framework/embedding/lockless_hash_map_cpu.h"
+#include "tensorflow/core/platform/stream_executor.h"
+#include "tensorflow/core/util/gpu_kernel_helper.h"
+#include "tensorflow/stream_executor/device_memory.h"
 #endif  // TENSORFLOW_USE_GPU_EV
 #endif  // GOOGLE_CUDA
 #include "tensorflow/core/framework/embedding/kv_interface.h"
@@ -289,18 +292,6 @@ class StorageManager {
       *value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
     }
 
-    if (sc_.type == StorageType::HBM_DRAM && level && found) {
-#if GOOGLE_CUDA
-#if !TENSORFLOW_USE_GPU_EV
-      ValuePtr<V>* gpu_value_ptr = new_value_ptr_fn_(kvs_[0].second, size);
-      V* cpu_data_address = (*value_ptr)->GetValue(0, 0);
-      V* gpu_data_address = gpu_value_ptr->GetValue(0, 0);
-      cudaMemcpy(gpu_data_address, cpu_data_address,
-          size * sizeof(V), cudaMemcpyHostToDevice);
-      *value_ptr = gpu_value_ptr;
-#endif  // TENSORFLOW_USE_GPU_EV
-#endif  // GOOGLE_CUDA
-    }
     if (level || !found) {
       Status s = kvs_[0].first->Insert(key, *value_ptr);
       if (!s.ok()) {
@@ -351,7 +342,8 @@ class StorageManager {
 #if !TENSORFLOW_USE_GPU_EV
   void CopyBackToGPU(int total, K* keys, int64 size, bool* copyback_flags,
       V** memcpy_address, size_t value_len, int *copyback_cursor,
-      ValuePtr<V> **gpu_value_ptrs, V* memcpy_buffer_gpu){
+      ValuePtr<V> **gpu_value_ptrs, V* memcpy_buffer_gpu,
+      stream_executor::Stream* stream){
     auto memcpy_buffer_cpu = (V*)malloc(total * value_len * sizeof(V));
     int j = 0;
     for (int i = 0; i < size;i++) {
@@ -371,9 +363,8 @@ class StorageManager {
         kvs_[0].first->Insert(keys[i], gpu_value_ptr);
       }
     }
-
-    cudaMemcpy(memcpy_buffer_gpu, memcpy_buffer_cpu,
-        total * value_len * sizeof(V), cudaMemcpyHostToDevice);
+    se::DeviceMemoryBase dev_value_ptr(memcpy_buffer_gpu, sizeof(V) * total * value_len);
+    stream->ThenMemcpy(memcpy_buffer_gpu, memcpy_buffer_cpu, total * value_len * sizeof(V));
   }
 #endif  // TENSORFLOW_USE_GPU_EV
 #endif  // GOOGLE_CUDA

@@ -65,7 +65,8 @@ class EmbeddingFilter {
 
   virtual Status LookupOrCreateKey(K key, ValuePtr<V>** val, bool* is_filter) = 0;
   virtual void CreateGPUBatch(V* val_base, V** default_values, int64 size,
-    int64 slice_elems, int64 value_len_, bool* init_flags, V** memcpy_address) = 0;
+    int64 slice_elems, int64 value_len_, bool* init_flags, V** memcpy_address,
+    const Device& d, stream_executor::Stream* stream) = 0;
 
   virtual int64 GetFreq(K key, ValuePtr<V>* value_ptr) = 0;
   virtual int64 GetFreq(K key) = 0;
@@ -122,7 +123,8 @@ class BloomFilter : public EmbeddingFilter<K, V, EV> {
 
   void CreateGPUBatch(V* val_base, V** default_values, int64 size,
       int64 slice_elems, int64 value_len_, bool* init_flags,
-      V** memcpy_address) {
+      V** memcpy_address, const Device& d, 
+      stream_executor::Stream* stream) {
   }
 
   Status LookupOrCreateKey(K key, ValuePtr<V>** val,
@@ -408,7 +410,8 @@ class CounterFilter : public EmbeddingFilter<K, V, EV> {
 
   void CreateGPUBatch(V* val_base, V** default_values, int64 size,
       int64 slice_elems, int64 value_len_, bool* init_flags,
-      V** memcpy_address) {
+      V** memcpy_address, const Device& d, 
+      stream_executor::Stream* stream) {
   }
 
   Status LookupOrCreateKey(K key, ValuePtr<V>** val,
@@ -497,35 +500,36 @@ class NullableFilter : public EmbeddingFilter<K, V, EV> {
   }
 
   void CreateGPUBatch(V* val_base, V** default_values, int64 size,
-    int64 slice_elems, int64 value_len, bool* init_flags, V** memcpy_address) {
-#if GOOGLE_CUDA
+    int64 slice_elems, int64 value_len, bool* init_flags, V** memcpy_address,
+    const Device& d, stream_executor::Stream* stream) {
 #if !TENSORFLOW_USE_GPU_EV
     int block_dim = 128;
     V** dev_value_address = (V**)ev_->GetBuffer1(size);
     V** dev_default_address = (V**)ev_->GetBuffer2(size);
     bool* dev_init_flags = (bool*)ev_->GetBuffer3(size);
-
-    cudaMemcpy(dev_value_address, memcpy_address,
-        sizeof(V *) * size, cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_default_address, default_values,
-        sizeof(V *) * size, cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_init_flags, init_flags,
-        sizeof(bool) * size, cudaMemcpyHostToDevice);
+    se::DeviceMemoryBase dev_value_ptr(dev_value_address, sizeof(V*) * size);
+    se::DeviceMemoryBase dev_default_ptr(dev_default_address,
+                                             sizeof(V*) * size);
+    se::DeviceMemoryBase dev_init_ptr(dev_init_flags, sizeof(bool) * size);
+                                             
+    stream->ThenMemcpy(dev_value_ptr, memcpy_address, sizeof(V *) * size);
+    stream->ThenMemcpy(dev_default_ptr, memcpy_address, sizeof(V *) * size);
+    stream->ThenMemcpy(dev_init_flags, memcpy_address, sizeof(bool) * size);
 
     int limit = size;
     int length = value_len;
+    GpuLaunchConfig config = GetGpuLaunchConfig(limit * length, d);
     void* args1[] = {(void*)&dev_value_address,
                      (void*)&val_base,
                      (void*)&length,
                      (void*)&limit,
                      (void*)&dev_default_address,
                      (void*)&dev_init_flags};
-    cudaLaunchKernel((void *)BatchCopy<V>,
-                     (limit + block_dim - 1) / block_dim * length,
-                     block_dim, args1, 0, NULL);
-    cudaDeviceSynchronize();
+
+    TF_CHECK_OK(GpuLaunchKernel((void *)BatchCopy<V>,
+                                 config.block_count, config.thread_per_block,
+                                 0, d.stream(), args);
 #endif  // TENSORFLOW_USE_GPU_EV
-#endif  // GOOGLE_CUDA
   }
 
   Status LookupOrCreateKey(K key, ValuePtr<V>** val,

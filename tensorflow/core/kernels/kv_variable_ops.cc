@@ -675,14 +675,17 @@ class KvResourceGatherGPUOp : public OpKernel {
             slice_bytes, do_work);
 
         const Device& d = c->eigen_device<Device>();
+        auto stream = c->op_device_context()->stream();
 
         ev->InitializeEmbeddingOnGPU(ids, indices_size,
                                      init_flags, memcpy_address,
-                                     default_values, d);
-        ev->CopyBackToGPU(ids, indices_size, copyback_flags, memcpy_address);
+                                     default_values, d,
+                                     stream);
+        ev->CopyBackToGPU(ids, indices_size, copyback_flags, memcpy_address, d,
+                          stream);
 
         ev->CreateGPUBatch(out_base, default_values, indices_size,
-            slice_elems, init_flags, memcpy_address);
+            slice_elems, init_flags, memcpy_address, d, stream);
         delete []init_flags;
         delete []copyback_flags;
         delete []memcpy_address;
