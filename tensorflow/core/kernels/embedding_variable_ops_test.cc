@@ -1237,25 +1237,6 @@ void t1_gpu(KVInterface<int64, float>* hashmap) {
   }
 }
 
-#if GOOGLE_CUDA
-#if !TENSORFLOW_USE_GPU_EV
-TEST(EmbeddingVariableTest,TestRemoveLocklessCPU) {
-    KVInterface<int64, float>* hashmap =
-      new LocklessHashMapCPU<int64, float>();
-    ASSERT_EQ(hashmap->Size(), 0);
-    LOG(INFO) << "hashmap size: " << hashmap->Size();
-    auto t = std::thread(t1, hashmap);
-    t.join();
-    LOG(INFO) << "hashmap size: " << hashmap->Size();
-    ASSERT_EQ(hashmap->Size(), 100);
-    TF_CHECK_OK(hashmap->Remove(1));
-    TF_CHECK_OK(hashmap->Remove(2));
-    ASSERT_EQ(hashmap->Size(), 98);
-    LOG(INFO) << "2 size:" << hashmap->Size();
-}
-#endif  // TENSORFLOW_USE_GPU_EV
-#endif  // GOOGLE_CUDA
-
 /*void CommitGPU(KVInterface<int64, float>* hashmap) {
   for (int64 i = 0; i< 100; ++i) {
     ValuePtr<float>* tmp= new NormalGPUValuePtr<float>(ev_allocator(), 100);
@@ -1593,6 +1574,93 @@ TEST(KVInterfaceTest, TestSSDKVCompaction) {
     for (int j = 0; j < 124; j++){
       ASSERT_EQ(v[4+j], i + 2);
     }
+  }
+}
+
+void ReadData(int thread_id, int64 total, int64 task_per_thread,
+              const std::vector<int64>& ids, const std::vector<EmbFile*>& file_vec,
+              int64 ids_per_file, int64 unit_size, char** output) {
+  int64 st = thread_id * task_per_thread;
+  int64 ed = ((thread_id + 1) * task_per_thread >= total) ? total : (thread_id + 1) * task_per_thread;
+  //LOG(INFO)<<st<<"-"<<ed;
+  for (int64 i = st; i < ed; i++) {
+    int file_id = ids[i] / ids_per_file;
+    int64 pos = ids[i] % ids_per_file;
+    EmbFile* file = file_vec[file_id];
+    //file->ReadWithoutMap(output[i], unit_size, pos * unit_size);
+    file->Read(output[i], unit_size, pos * unit_size);
+  }
+}
+
+TEST(KVInterfaceTest, TestEmbFileRead) {
+  std::string directory_path = "/tmp/emb_file_read/ssd_file_";
+  timespec start,end;
+  double execution_time;
+  std::vector<EmbFile*> file_vec;
+  int64 BUFFER_SIZE = 1 << 27;
+  char* value = new char[BUFFER_SIZE];
+  int64 unit_size = 1024;
+  int64 num_of_files = 1;
+  int64 num_of_threads = 1;
+  int64 num_of_write = 1;
+  int64 ids_per_file = BUFFER_SIZE / unit_size;
+  int64 num_of_ids = BUFFER_SIZE / unit_size * num_of_files;
+  int64 bytes_per_write = BUFFER_SIZE / num_of_write;
+  LOG(INFO)<<"ids_per_file: "<<ids_per_file
+           <<", num_of_ids: "<<num_of_ids
+           <<", unit_size: "<<unit_size
+           <<", num_of_threads: "<<num_of_threads
+           <<", num_of_write: "<<num_of_write
+           <<", num_of_files: "<<num_of_files;
+  srand((unsigned)time(NULL));
+  char** output = new char*[num_of_ids];
+  for (int i = 0; i < num_of_ids; i++) {
+    output[i] = new char[unit_size];
+  }
+  //Generate Files
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (int i = 0; i < num_of_files; i++) {
+    EmbFile* file = new EmbFile(directory_path, i, BUFFER_SIZE);
+    for (int j = 0; j < num_of_write; j++){
+      file->Write(value + j * bytes_per_write, bytes_per_write);
+      //file->Flush();
+    }
+    //file->Map();
+    file_vec.emplace_back(file);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  execution_time = ((double)(end.tv_sec - start.tv_sec) *
+                1000000000 + end.tv_nsec - start.tv_nsec) / 1000000;
+  LOG(INFO) << "Write time: " << execution_time << "ms";
+  //Generate ids
+  std::vector<int64> ids;
+  int64 num_of_ops = 10000;
+  for (int64 i = 0; i < num_of_ops; i++ ) {
+    ids.emplace_back(rand() % num_of_ids);
+  }
+  //Read data
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  std::vector<std::thread> read_threads(num_of_threads);
+  for (int i = 0 ; i < num_of_threads; i++) {
+    read_threads[i] = std::thread(ReadData, i, (int64)ids.size(),
+                                  (int64)(ids.size()/num_of_threads),
+                                  ids, file_vec, ids_per_file,
+                                  unit_size, output);
+  }
+  for (auto &t : read_threads) {
+    t.join();
+  }
+  
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  execution_time = ((double)(end.tv_sec - start.tv_sec) *
+                1000000000 + end.tv_nsec - start.tv_nsec) / 1000000;
+  double IOPS = num_of_ops / execution_time * 1000;
+  LOG(INFO) << "execution time: " << execution_time << "ms";
+  LOG(INFO) << "IOPS: "<<IOPS;
+
+  for (int i = 0; i < num_of_files; i++) {
+    //file_vec[i]->Unmap();
+    file_vec[i]->DeleteFile();
   }
 }
 
