@@ -270,6 +270,14 @@ class ValuePtr {
     return ptr_;
   }
 
+  virtual bool IsRecordFreq() {
+    return false;
+  }
+
+  virtual bool IsRecordStep() {
+    return false;
+  }
+
   // Global Step
   virtual int64 GetStep() {
     LOG(FATAL) << "Unsupport GlobalStep in subclass of ValuePtrBase";
@@ -341,6 +349,14 @@ class NormalValuePtr : public ValuePtr<V> {
 
   ~NormalValuePtr() {
     free(this->ptr_);
+  }
+
+  bool IsRecordFreq() {
+    return true;
+  }
+
+  bool IsRecordStep() {
+    return true;
   }
 
   int64 GetStep() {
@@ -423,6 +439,14 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
 
   virtual void Destroy(Allocator* allocator) {
     allocator->DeallocateRaw(this->ptr_);
+  }
+
+  bool IsRecordFreq() {
+    return true;
+  }
+
+  bool IsRecordStep() {
+    return true;
   }
 
   int64 GetStep() {
@@ -521,6 +545,14 @@ class NormalGPUValuePtr : public ValuePtr<V> {
 
   virtual void Destroy(Allocator* allocator) {
     return;
+  }
+
+  bool IsRecordFreq() {
+    return true;
+  }
+
+  bool IsRecordStep() {
+    return true;
   }
 
   int64 GetStep() {
