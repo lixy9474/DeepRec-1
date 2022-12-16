@@ -76,6 +76,50 @@ REGISTER_KV_VAR_HANDLE(int64, float)
 #endif  // TENSORFLOW_USE_GPU_EV
 #endif  // GOOGLE_CUDA
 
+template <typename TKey, typename TValue>
+class KvResourceLookupResourceOp : public OpKernel {
+ public:
+  explicit KvResourceLookupResourceOp(OpKernelConstruction* c) : OpKernel(c) {}
+
+  void Compute(OpKernelContext* ctx) override {
+    EmbeddingVar<TKey, TValue>* ev = nullptr;
+    OP_REQUIRES_OK(ctx,
+                   LookupResource(ctx, HandleFromInput(ctx, 0), &ev));
+    Tensor* output;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {1}, &output));
+    auto output_scalar = output->scalar<int64>();
+    output_scalar() = (int64)ev;
+  }
+};
+
+#define REGISTER_KV_VAR_HANDLE(ktype, vtype)                           \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceLookupResource")             \
+                          .Device(DEVICE_CPU)                          \
+                          .TypeConstraint<ktype>("Tkeys")               \
+                          .TypeConstraint<vtype>("dtype"),              \
+                          KvResourceLookupResourceOp<ktype, vtype>);
+#define REGISTER_KERNELS_ALL_INDEX(type)                               \
+  REGISTER_KV_VAR_HANDLE(int32, type)                                  \
+  REGISTER_KV_VAR_HANDLE(int64, type)
+TF_CALL_REAL_NUMBER_TYPES(REGISTER_KERNELS_ALL_INDEX)
+#undef REGISTER_KERNELS_ALL_INDEX
+#undef REGISTER_KV_VAR_HANDLE
+
+#if GOOGLE_CUDA
+#if !TENSORFLOW_USE_GPU_EV
+#define REGISTER_KV_VAR_HANDLE(ktype, vtype)                           \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceLookupResource")             \
+                          .Device(DEVICE_GPU)                          \
+                          .TypeConstraint<ktype>("Tkeys")              \
+                          .TypeConstraint<vtype>("dtype")              \
+                          .HostMemory("output"),                       \
+                          KvResourceLookupResourceOp<ktype, vtype>);
+REGISTER_KV_VAR_HANDLE(int32, float)
+REGISTER_KV_VAR_HANDLE(int64, float)
+#undef REGISTER_KV_VAR_HANDLE
+#endif  // TENSORFLOW_USE_GPU_EV
+#endif  // GOOGLE_CUDA
+
 template <typename T, typename TKey, typename TValue>
 class KvVariableShapeOp : public OpKernel {
  public:
