@@ -584,4 +584,15 @@ REGISTER_OP("KvResourceLookupTier")
     })
     .Doc(R"doc()doc");
 
+REGISTER_OP("KvResourceLookupResource")
+    .Input("resource_handle: resource")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("dtype: type = DT_FLOAT")
+    .Output("output: int64")
+    .SetShapeFn([](InferenceContext* c) {
+      c->set_output(0, c->Scalar());
+      return Status::OK();
+    })
+    .Doc(R"doc()doc");
+
 }  // namespace tensorflow
