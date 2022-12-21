@@ -18,6 +18,7 @@ limitations under the License.
 #if GOOGLE_CUDA
 #include "tensorflow/core/framework/embedding/lockless_hash_map_cpu.h"
 #include "tensorflow/core/framework/embedding/multi_tier_storage.h"
+#include "tensorflow/core/framework/embedding/hbm_storage_iterator.h"
 
 namespace tensorflow {
 template <class V>
@@ -210,6 +211,39 @@ class HbmDramStorage : public MultiTierStorage<K, V> {
       TF_CHECK_OK(dram_kv_->GetSnapshot(key_list, value_ptr_list));
     }
     return Status::OK();
+  }
+
+  int64 GetSnapshot(std::vector<K>* key_list,
+      std::vector<V* >* value_list,
+      std::vector<int64>* version_list,
+      std::vector<int64>* freq_list,
+      const EmbeddingConfig& emb_config,
+      FilterPolicy<K, V, EmbeddingVar<K, V>>* filter,
+      embedding::Iterator** it) override {
+    std::vector<ValuePtr<V>*> hbm_value_ptr_list, dram_value_ptr_list;
+    std::vector<K> temp_hbm_key_list, temp_dram_key_list;
+    // Get Snapshot of HBM storage
+    {
+      mutex_lock l(hbm_mu_);
+      TF_CHECK_OK(hbm_kv_->GetSnapshot(&temp_hbm_key_list,
+                                       &hbm_value_ptr_list));
+    }
+    // Get Snapshot of DRAM storage.
+    {
+      mutex_lock l(dram_mu_);
+      TF_CHECK_OK(dram_kv_->GetSnapshot(&temp_dram_key_list,
+                                        &dram_value_ptr_list));
+    }
+    *it = new HbmDramIterator<K, V>(temp_hbm_key_list,
+                                    temp_dram_key_list,
+                                    hbm_value_ptr_list,
+                                    dram_value_ptr_list,
+                                    Storage<K, V>::alloc_len_,
+                                    gpu_alloc_,
+                                    emb_config.emb_index);
+    // This return value is not the exact number of IDs
+    // because the two tables intersect.
+    return temp_hbm_key_list.size() + temp_dram_key_list.size();
   }
 
   void CreateEmbeddingMemoryPool(

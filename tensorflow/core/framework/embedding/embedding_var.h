@@ -466,8 +466,13 @@ class EmbeddingVar : public ResourceBase {
                 int64 partition_id,
                 int64 partition_num,
                 bool is_filter) {
-    return filter_->Import(restore_buff, key_num, bucket_num,
-        partition_id, partition_num, is_filter);
+    if (IsUseHbm()) {
+      return filter_->ImportToHbm(restore_buff, key_num, bucket_num,
+          partition_id, partition_num, is_filter);
+    } else {
+      return filter_->ImportToDram(restore_buff, key_num, bucket_num,
+          partition_id, partition_num, is_filter);
+    }
   }
 
   void RestoreSsdHashmap(

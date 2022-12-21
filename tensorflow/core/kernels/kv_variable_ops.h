@@ -37,7 +37,7 @@ namespace tensorflow {
 using GPUDevice = Eigen::GpuDevice;
 
 namespace {
-  const int kSavedPartitionNum = 1000;
+  extern const int kSavedPartitionNum = 1000;
 }
 
 template<class T>
@@ -324,10 +324,16 @@ Status DumpEmbeddingValues(EmbeddingVar<K, V>* ev,
 
   VLOG(1) << "EV:" << tensor_key << ", save size:" << num_of_keys;
   int64 iterator_size = 0;
+  int64 filter_iterator_size = 0;
   if (it != nullptr) {
+    it->SwitchToAdmitFeatures();
     ev->storage_manager()->iterator_mutex_lock();
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
       ++iterator_size;
+    }
+    it->SwitchToFilteredFeatures();
+    for (it->SeekToFirst(); it->Valid(); it->Next()) {
+      ++filter_iterator_size;
     }
   }
 
@@ -451,9 +457,16 @@ Status DumpEmbeddingValues(EmbeddingVar<K, V>* ev,
     part_filter_offset[partid + 1] = part_filter_offset[partid] + key_filter_list.size();
   }
   // TODO: DB iterator not support partition_offset
+  if (it != nullptr) {
+    it->SetPartOffset((int32*)part_offset_tensor->data());
+  }
   writer->Add(tensor_key + "-partition_offset", *part_offset_tensor);
-  for(int i = 0; i <  kSavedPartitionNum + 1; i++) {
-    part_offset_flat(i) = part_filter_offset[i];
+  if (it != nullptr) {
+    it->SetPartFilterOffset((int32*)part_offset_tensor->data());
+  } else {
+    for(int i = 0; i <  kSavedPartitionNum + 1; i++) {
+      part_offset_flat(i) = part_filter_offset[i];
+    }
   }
   writer->Add(tensor_key + "-partition_filter_offset", *part_offset_tensor);
 
@@ -466,7 +479,7 @@ Status DumpEmbeddingValues(EmbeddingVar<K, V>* ev,
   size_t bytes_limit = 8 << 20;
   char* dump_buffer = (char*)malloc(sizeof(char) * bytes_limit);
   Status st;
-
+  it->SwitchToAdmitFeatures();
   EVKeyDumpIterator<K> ev_key_dump_iter(partitioned_tot_key_list);
   st = SaveTensorWithFixedBuffer(tensor_key + "-keys", writer, dump_buffer,
                                  bytes_limit, &ev_key_dump_iter,
@@ -507,10 +520,12 @@ Status DumpEmbeddingValues(EmbeddingVar<K, V>* ev,
     return st;
   }
 
+  it->SwitchToFilteredFeatures();
   EVKeyDumpIterator<K> ev_key_filter_dump_iter(partitioned_tot_key_filter_list);
   st = SaveTensorWithFixedBuffer(tensor_key + "-keys_filtered",
       writer, dump_buffer, bytes_limit, &ev_key_filter_dump_iter,
-      TensorShape({partitioned_tot_key_filter_list.size()}));
+      TensorShape({partitioned_tot_key_filter_list.size()
+          + filter_iterator_size}), it);
   if (!st.ok()) {
     free(dump_buffer);
     return st;
@@ -520,7 +535,8 @@ Status DumpEmbeddingValues(EmbeddingVar<K, V>* ev,
       partitioned_tot_version_filter_list);
   st = SaveTensorWithFixedBuffer(tensor_key + "-versions_filtered",
       writer, dump_buffer, bytes_limit, &ev_version_filter_dump_iter,
-      TensorShape({partitioned_tot_version_filter_list.size()}));
+      TensorShape({partitioned_tot_version_filter_list.size()
+          + filter_iterator_size}), it, -3);
   if (!st.ok()) {
     free(dump_buffer);
     return st;
@@ -530,7 +546,8 @@ Status DumpEmbeddingValues(EmbeddingVar<K, V>* ev,
       partitioned_tot_freq_filter_list);
   st = SaveTensorWithFixedBuffer(tensor_key + "-freqs_filtered",
       writer, dump_buffer, bytes_limit, &ev_freq_filter_dump_iter,
-      TensorShape({partitioned_tot_freq_filter_list.size()}));
+      TensorShape({partitioned_tot_freq_filter_list.size()
+          + filter_iterator_size}), it, -2);
   if (!st.ok()) {
     free(dump_buffer);
     return st;
