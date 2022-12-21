@@ -259,6 +259,12 @@ class MultiTierStorage : public Storage<K, V> {
     return;
   }
 
+  void AllocateMemoryForNewFeatures(
+      ValuePtr<V>** value_ptr_list,
+      int64 num_of_value_ptrs) override {
+    return;
+  }
+
   void Schedule(std::function<void()> fn) override {
     cache_thread_pool_->Schedule(std::move(fn));
   }

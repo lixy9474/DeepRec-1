@@ -165,6 +165,12 @@ class StorageManager {
     storage_->AllocateMemoryForNewFeatures(value_ptr_list);
   }
 
+  void AllocateMemoryForNewFeatures(
+     ValuePtr<V>** value_ptr_list,
+     int64 num_of_value_ptrs) {
+    storage_->AllocateMemoryForNewFeatures(value_ptr_list, num_of_value_ptrs);
+  }
+
   void BatchLookupOrCreate(const K* key, V* val, V* default_v,
       int32 default_v_num, bool is_use_default_value_tensor,
       size_t n, const Eigen::GpuDevice& device) {
