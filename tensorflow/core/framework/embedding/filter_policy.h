@@ -53,12 +53,20 @@ class FilterPolicy {
 
   virtual int64 GetFreq(K key, ValuePtr<V>* value_ptr) = 0;
   virtual int64 GetFreq(K key) = 0;
-  virtual Status Import(RestoreBuffer& restore_buff,
+  virtual Status ImportToDram(RestoreBuffer& restore_buff,
     int64 key_num,
     int bucket_num,
     int64 partition_id,
     int64 partition_num,
     bool is_filter) = 0;
+  #if GOOGLE_CUDA
+  virtual Status ImportToHbm(RestoreBuffer& restore_buff,
+    int64 key_num,
+    int bucket_num,
+    int64 partition_id,
+    int64 partition_num,
+    bool is_filter) = 0;
+  #endif //GOOGLE_CUDA
 };
 } // tensorflow
 
