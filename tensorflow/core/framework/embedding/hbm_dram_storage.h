@@ -80,7 +80,7 @@ class HbmDramStorage : public MultiTierStorage<K, V> {
       if (s.ok()) {
         break;
       } else {
-        (value_ptrs[i])->Destroy(gpu_alloc_);
+        (*value_ptr)->Destroy(gpu_alloc_);
         delete *value_ptr;
       }
     } while (!(hbm_kv_->Lookup(key, value_ptr)).ok());
@@ -148,14 +148,14 @@ class HbmDramStorage : public MultiTierStorage<K, V> {
     auto memcpy_buffer_cpu = (V*)malloc(total * value_len * sizeof(V));
     int64 i = 0;
     auto it = copyback_cursor.cbegin();
-    V* dev_value_address =
-        (V*)gpu_alloc_->AllocateRaw(
-            Allocator::kAllocatorAlignment,
-            total * value_len * sizeof(V));
     for ( ; it != copyback_cursor.cend(); ++it, ++i) {
       ValuePtr<V>* gpu_value_ptr =
           layout_creator_->Create(gpu_alloc_, value_len);
-      gpu_value_ptr->SetPtr(dev_value_address + i * value_len);
+      V* val_ptr = embedding_mem_pool_->Allocate();
+      bool flag = gpu_value_ptr->SetPtr(val_ptr);
+      if (!flag) {
+        embedding_mem_pool_->Deallocate(val_ptr);
+      }
       //Copy Header Info
       int64 j = *it;
       memcpy((char *)gpu_value_ptr->GetPtr(),
@@ -257,7 +257,23 @@ class HbmDramStorage : public MultiTierStorage<K, V> {
   void AllocateMemoryForNewFeatures(
       const std::vector<ValuePtr<V>*>& value_ptr_list) override {
     for (auto it : value_ptr_list) {
-      it->SetPtr(embedding_mem_pool_->Allocate());
+      V* val_ptr = embedding_mem_pool_->Allocate();
+      bool flag = it->SetPtr(val_ptr);
+      if (!flag) {
+        embedding_mem_pool_->Deallocate(val_ptr);
+      }
+    }
+  }
+
+  void AllocateMemoryForNewFeatures(
+     ValuePtr<V>** value_ptr_list,
+     int64 num_of_value_ptrs) override {
+    for (int64 i = 0; i < num_of_value_ptrs; i++) {
+      V* val_ptr = embedding_mem_pool_->Allocate();
+      bool flag = value_ptr_list[i]->SetPtr(val_ptr);
+      if (!flag) {
+        embedding_mem_pool_->Deallocate(val_ptr);
+      }
     }
   }
 

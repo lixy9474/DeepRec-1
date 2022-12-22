@@ -1397,6 +1397,9 @@ TF_CALL_REAL_NUMBER_TYPES(REGISTER_KERNELS_ALL_INDEX)
 #define REGISTER_KERNELS(ktype, vtype)                         \
   REGISTER_KERNEL_BUILDER(Name("KvResourceImportV3")           \
                             .Device(DEVICE_GPU)                \
+                            .HostMemory("prefix")              \
+                            .HostMemory("tensor_names")        \
+                            .HostMemory("empty_key")           \
                             .TypeConstraint<ktype>("Tkeys")    \
                             .TypeConstraint<vtype>("dtype"),   \
                           KvResourceImportV3Op<ktype, vtype>);

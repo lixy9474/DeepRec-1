@@ -1123,15 +1123,13 @@ Status EVRestoreDynamically(EmbeddingVar<K, V>* ev,
       if (!st.ok()) {
         LOG(FATAL) <<  "EV restoring fail:" << st.ToString();
       }
-      Tensor part_offset_tensor;
-      st = context->allocate_temp(part_offset_type,
-          part_offset_shape, &part_offset_tensor);
+      Tensor part_offset_tensor(cpu_allocator(),
+          part_offset_type, part_offset_shape);
       if (!st.ok()) {
         LOG(FATAL) <<  "EV restoring fail:" << st.ToString();
       }
-      Tensor part_filter_offset_tensor;
-      st = context->allocate_temp(part_filter_offset_type,
-          part_filter_offset_shape, &part_filter_offset_tensor);
+      Tensor part_filter_offset_tensor(cpu_allocator(),
+          part_offset_type, part_offset_shape);
       if (!st.ok()) {
         LOG(FATAL) <<  "EV restoring fail:" << st.ToString();
       }

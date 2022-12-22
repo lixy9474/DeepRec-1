@@ -389,6 +389,50 @@ class EmbeddingVar : public ResourceBase {
     }
     storage_manager_->AllocateMemoryForNewFeatures(value_ptr_list);
   }
+
+  void LookupOrCreateEmbOnHBM(
+      K* key_list,
+      ValuePtr<V>** value_ptr_list,
+      V** value_addr,
+      int64 key_num) {
+    V** dev_src_addr_list = nullptr;
+    dev_src_addr_list = (V**)alloc_->AllocateRaw(
+        Allocator::kAllocatorAlignment, sizeof(V*) * key_num);
+    V** dst_addr_list = new V*[key_num];
+    V** dev_dst_addr_list = (V**)alloc_->AllocateRaw(
+        Allocator::kAllocatorAlignment, sizeof(V*) * key_num);
+    storage_manager_->AllocateMemoryForNewFeatures(value_ptr_list, key_num);
+    cudaMemcpy(dev_src_addr_list,
+               value_addr,
+               sizeof(V*) * key_num,
+               cudaMemcpyHostToDevice);
+    for (int64 i = 0; i < key_num; i++) {
+      value_ptr_list[i]->SetInitialized(emb_config_.emb_index);
+      dst_addr_list[i] =
+          value_ptr_list[i]->GetValue(
+              emb_config_.emb_index,
+              storage_manager_->GetOffset(emb_config_.emb_index));
+    }
+    cudaMemcpy(dev_dst_addr_list,
+               dst_addr_list,
+               sizeof(V*) * key_num,
+               cudaMemcpyHostToDevice);
+    int block_dim = 128;
+    void* args[] = {
+        (void*)&dev_src_addr_list,
+        (void*)&dev_dst_addr_list,
+        (void*)&value_len_,
+        (void*)&key_num};
+    cudaLaunchKernel(
+        (void *)CopyEmbedding<V>,
+        (key_num + block_dim - 1) / block_dim * value_len_,
+        block_dim,
+        args, 0, NULL);
+    cudaDeviceSynchronize();
+    alloc_->DeallocateRaw(dev_src_addr_list);
+    alloc_->DeallocateRaw(dev_dst_addr_list);
+    delete[] dst_addr_list;
+  }
 #endif  // GOOGLE_CUDA
 
   V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, const V* default_v) {

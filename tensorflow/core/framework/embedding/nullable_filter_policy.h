@@ -102,7 +102,7 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
     }
   }
 
-  Status ImportToDram(RestoreBuffer& restore_buff,
+  Status ImportToHbm(RestoreBuffer& restore_buff,
                 int64 key_num,
                 int bucket_num,
                 int64 partition_id,
@@ -112,6 +112,17 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
     V* value_buff = (V*)restore_buff.value_buffer;
     int64* version_buff = (int64*)restore_buff.version_buffer;
     int64* freq_buff = (int64*)restore_buff.freq_buffer;
+    ValuePtr<V>** value_ptr_list = new ValuePtr<V>*[key_num];
+    V** default_value_addr = new V*[key_num];
+    V* dev_value_buff = nullptr;
+    if (!is_filter) {
+      dev_value_buff = (V*)ev_->GetAllocator()->AllocateRaw(
+          Allocator::kAllocatorAlignment,
+          key_num * ev_->ValueLen() * sizeof(V));
+      cudaMemcpy(dev_value_buff, value_buff,
+                 key_num * ev_->ValueLen() * sizeof(V),
+                 cudaMemcpyHostToDevice);
+    }
     for (auto i = 0; i < key_num; ++i) {
       // this can describe by graph(Mod + DynamicPartition),
       // but memory waste and slow
@@ -120,7 +131,7 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
         continue;
       }
       ValuePtr<V>* value_ptr = nullptr;
-      TF_CHECK_OK(ev_->LookupOrCreateKey(key_buff[i], &value_ptr));
+      ev_->CreateKey(key_buff[i], &value_ptr);
       if (config_.filter_freq !=0 || ev_->IsMultiLevel()
           || config_.record_freq) {
         value_ptr->SetFreq(freq_buff[i]);
@@ -128,21 +139,28 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
       if (config_.steps_to_live != 0 || config_.record_version) {
         value_ptr->SetStep(version_buff[i]);
       }
-      if (!is_filter) {
-        V* v = ev_->LookupOrCreateEmb(value_ptr,
-            value_buff + i * ev_->ValueLen());
-      }else {
-        V* v = ev_->LookupOrCreateEmb(value_ptr,
-            ev_->GetDefaultValue(key_buff[i]));
-      }
+      value_ptr_list[i] = value_ptr;
+      default_value_addr[i] = (is_filter) ?
+                              ev_->GetDefaultValue(key_buff[i]) :
+                              dev_value_buff + i * ev_->ValueLen();
     }
-    if (ev_->IsMultiLevel()) {
+
+    ev_->LookupOrCreateEmbOnHBM(key_buff, value_ptr_list,
+                                default_value_addr, key_num);
+
+    if (ev_->IsMultiLevel() && config_.is_primary()) {
       ev_->UpdateCache(key_buff, key_num, version_buff, freq_buff);
+    }
+
+    delete[] value_ptr_list;
+    delete[] default_value_addr;
+    if (!is_filter) {
+      ev_->GetAllocator()->DeallocateRaw(dev_value_buff);
     }
     return Status::OK();
   }
 
-  Status ImportToHbm(RestoreBuffer& restore_buff,
+  Status ImportToDram(RestoreBuffer& restore_buff,
                 int64 key_num,
                 int bucket_num,
                 int64 partition_id,

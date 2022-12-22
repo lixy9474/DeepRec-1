@@ -92,7 +92,6 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
       *value_ptr = layout_creator_->Create(gpu_alloc_, alloc_len);
       Status s = hbm_kv_->Insert(key, *value_ptr);
       if (s.ok()) {
-        (*value_ptr)->SetPtr(embedding_mem_pool_->Allocate());
         break;
       } else {
         delete *value_ptr;
@@ -173,16 +172,12 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
       V** memcpy_address, size_t value_len,
       ValuePtr<V> **gpu_value_ptrs, V* memcpy_buffer_gpu) override {
     auto memcpy_buffer_cpu = (V*)malloc(total * value_len * sizeof(V));
-    V* dev_value_address =
-        (V*)gpu_alloc_->AllocateRaw(
-            Allocator::kAllocatorAlignment,
-            total * value_len * sizeof(V));
     int64 i = 0;
     auto it = copyback_cursor.cbegin();
     for ( ; it != copyback_cursor.cend(); ++it, ++i) {
       ValuePtr<V>* gpu_value_ptr =
           layout_creator_->Create(gpu_alloc_, value_len);
-      gpu_value_ptr->SetPtr(dev_value_address + i * value_len);
+      gpu_value_ptr->SetPtr(embedding_mem_pool_->Allocate());
       //Get cursor and destroy flag
       int64 j = *it & 0x0fffffffffffffff;
       bool destroy_flag = (*it >> 63) & 0x1;
@@ -349,7 +344,23 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
   void AllocateMemoryForNewFeatures(
       const std::vector<ValuePtr<V>*>& value_ptr_list) override {
     for (auto it : value_ptr_list) {
-      it->SetPtr(embedding_mem_pool_->Allocate());
+      V* val_ptr = embedding_mem_pool_->Allocate();
+      bool flag = it->SetPtr(val_ptr);
+      if (!flag) {
+        embedding_mem_pool_->Deallocate(val_ptr);
+      }
+    }
+  }
+
+  void AllocateMemoryForNewFeatures(
+     ValuePtr<V>** value_ptr_list,
+     int64 num_of_value_ptrs) override {
+    for (int64 i = 0; i < num_of_value_ptrs; i++) {
+      V* val_ptr = embedding_mem_pool_->Allocate();
+      bool flag = value_ptr_list[i]->SetPtr(val_ptr);
+      if (!flag) {
+        embedding_mem_pool_->Deallocate(val_ptr);
+      }
     }
   }
 

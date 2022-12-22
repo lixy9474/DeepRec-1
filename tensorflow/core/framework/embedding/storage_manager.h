@@ -152,6 +152,12 @@ class StorageManager {
       const std::vector<ValuePtr<V>*>& value_ptr_list) {
     storage_->AllocateMemoryForNewFeatures(value_ptr_list);
   }
+
+  void AllocateMemoryForNewFeatures(
+     ValuePtr<V>** value_ptr_list,
+     int64 num_of_value_ptrs) {
+    storage_->AllocateMemoryForNewFeatures(value_ptr_list, num_of_value_ptrs);
+  }
 #endif  // GOOGLE_CUDA
 
   Status Remove(K key) {

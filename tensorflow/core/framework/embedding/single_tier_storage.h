@@ -186,6 +186,12 @@ class SingleTierStorage : public Storage<K, V> {
     return;
   }
 
+  void AllocateMemoryForNewFeatures(
+      ValuePtr<V>** value_ptr_list,
+      int64 num_of_value_ptrs) override {
+    return;
+  }
+
   Status GetSnapshot(std::vector<K>* key_list,
       std::vector<ValuePtr<V>*>* value_ptr_list) override {
     return kv_->GetSnapshot(key_list, value_ptr_list);

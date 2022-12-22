@@ -124,6 +124,8 @@ class Storage {
       int64 block_size) = 0;
   virtual void AllocateMemoryForNewFeatures(
       const std::vector<ValuePtr<V>*>& value_ptr_list) = 0;
+  virtual void AllocateMemoryForNewFeatures(
+      ValuePtr<V>** value_ptr_list, int64 num_of_value_ptrs) = 0;
  
   inline mutex* get_mutex() { return &mu_; }
   inline int64 GetAllocLen() { return alloc_len_; }
