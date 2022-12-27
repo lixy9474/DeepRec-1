@@ -32,6 +32,29 @@ __global__ void SparseApplyAdagradGPU(V** a, V** v, V* g, float lr,
     int embedding_dim, long long int limit);
 
 template<class V>
+__global__ void SparseApplyAdamGPU(V** var, V** m, V** v,
+    V* g, V alpha, V beta1, V beta2, V epsilon,
+    int embedding_dim, long long int limit);
+
+template<class V>
+__global__ void SparseApplyAdamAsyncGPU(
+    V** var, V** m, V** v,
+    V* g, V lr, V beta1, V beta2, V epsilon,
+    V* beta1_power_ptr, V* beta2_power_ptr,
+    int embedding_dim, long long int limit);
+
+template<class V>
+__global__ void SparseApplyAdamAsyncSparseRmspropGPU(
+    V** var, V** m, V** v, V* g, V lr,
+    V beta1, V beta2, V epsilon,
+    int embedding_dim, long long int limit);
+
+template<class V>
+__global__ void SparseApplyAdamWGPU(V** var, V** m, V** v,
+    V* g, V alpha, V beta1, V beta2, V epsilon,
+    V weight_decay, int embedding_dim, long long int limit);
+
+template<class V>
 __global__ void CopyEmbedding(V** batch, V** batch_data_space,
     int total_dims, int limit);
 

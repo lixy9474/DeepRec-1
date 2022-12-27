@@ -77,6 +77,124 @@ template __global__ void SparseApplyAdagradGPU<double>(
     double**, double**, double*, float, int, long long int);
 
 template<class V>
+__global__ void SparseApplyAdamGPU(V** var, V** m, V** v,
+    V* g, V alpha, V beta1, V beta2, V epsilon,
+    int embedding_dim, long long int limit) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  int item_id = i / embedding_dim;
+  int item_pos = i % embedding_dim;
+
+  if (i < limit * embedding_dim) {
+    *(m[item_id] + item_pos) +=
+        (g[i] - (*(m[item_id] + item_pos))) * (1.0 - beta1);
+    *(v[item_id] + item_pos) +=
+        (g[i] * g[i] - (*(v[item_id] + item_pos))) * (1.0 - beta2);
+    *(var[item_id] + item_pos) -=
+        (*(m[item_id] + item_pos) * alpha) /
+        (sqrt(*(v[item_id] + item_pos)) + epsilon);
+  }
+}
+
+template __global__ void SparseApplyAdamGPU<float>(
+    float**, float**, float**, float*, float,
+    float, float, float, int, long long int);
+template __global__ void SparseApplyAdamGPU<double>(
+    double**, double**, double**, double*, double,
+    double, double, double, int, long long int);
+
+template<class V>
+__global__ void SparseApplyAdamAsyncGPU(
+    V** var, V** m, V** v,
+    V* g, V lr, V beta1, V beta2, V epsilon,
+    V* beta1_power_ptr, V* beta2_power_ptr,
+    int embedding_dim, long long int limit) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  int item_id = i / embedding_dim;
+  int item_pos = i % embedding_dim;
+
+  if (i < limit * embedding_dim) {
+    V beta1_power = *beta1_power_ptr;
+    V beta2_power = *beta2_power_ptr;
+    const V alpha = lr *
+        sqrt(static_cast<V>(1) - beta2_power) /
+        (static_cast<V>(1) - beta1_power);
+    *(m[item_id] + item_pos) = *(m[item_id] + item_pos) * beta1 +
+        g[i] * (1 - beta1);
+    *(v[item_id] + item_pos) = *(v[item_id] + item_pos) * beta2 +
+        g[i] * g[i] * (1 - beta2);
+    *(var[item_id] + item_pos) -=
+        (*(m[item_id] + item_pos) * alpha) /
+        (sqrt(*(v[item_id] + item_pos)) + epsilon);
+  }
+  __syncthreads();
+
+  if (i == 0) {
+    *beta1_power_ptr *= beta1;
+    *beta2_power_ptr *= beta2;
+  }
+}
+
+template __global__ void SparseApplyAdamAsyncGPU<float>(
+    float**, float**, float**, float*, float,
+    float, float, float, float*, float*, int, long long int);
+template __global__ void SparseApplyAdamAsyncGPU<double>(
+    double**, double**, double**, double*, double,
+    double, double, double, double*, double*, int, long long int);
+
+template<class V>
+__global__ void SparseApplyAdamAsyncSparseRmspropGPU(
+    V** var, V** m, V** v,
+    V* g, V lr, V beta1, V beta2, V epsilon,
+    int embedding_dim, long long int limit) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  int item_id = i / embedding_dim;
+  int item_pos = i % embedding_dim;
+
+  if (i < limit * embedding_dim) {
+    *(v[item_id] + item_pos) =  *(v[item_id] + item_pos) * beta2 +
+        g[i] * g[i] * (1.0 - beta2);
+    *(m[item_id] + item_pos) = *(m[item_id] + item_pos) * beta1 +
+        rsqrt(*(v[item_id] + item_pos) + epsilon) *
+        lr * g[i];
+    *(var[item_id] + item_pos) -= *(m[item_id] + item_pos);
+  }
+}
+
+template __global__ void SparseApplyAdamAsyncSparseRmspropGPU<float>(
+    float**, float**, float**, float*, float,
+    float, float, float, int, long long int);
+template __global__ void SparseApplyAdamAsyncSparseRmspropGPU<double>(
+    double**, double**, double**, double*, double,
+    double, double, double, int, long long int);
+
+template<class V>
+__global__ void SparseApplyAdamWGPU(V** var, V** m, V** v,
+    V* g, V alpha, V beta1, V beta2, V epsilon,
+    V weight_decay, int embedding_dim, long long int limit) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  int item_id = i / embedding_dim;
+  int item_pos = i % embedding_dim;
+
+  if (i < limit * embedding_dim) {
+    *(m[item_id] + item_pos) +=
+        (g[i] - *(m[item_id] + item_pos)) * (1.0 - beta1);
+    *(v[item_id] + item_pos) +=
+        (g[i] * g[i] - *(v[item_id] + item_pos)) * (1.0 - beta2);
+    *(var[item_id] + item_pos) -=
+        (*(m[item_id] + item_pos) * alpha) /
+        (sqrt(*(v[item_id] + item_pos)) + epsilon) +
+        weight_decay * (*(var[item_id] + item_pos));
+  }
+}
+
+template __global__ void SparseApplyAdamWGPU<float>(
+    float**, float**, float**, float*, float,
+    float, float, float, float, int, long long int);
+template __global__ void SparseApplyAdamWGPU<double>(
+    double**, double**, double**, double*, double,
+    double, double, double, double, int, long long int);
+
+template<class V>
 __global__ void CopyEmbedding(V** batch, V** batch_data_space,
     int total_dims, int limit) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
