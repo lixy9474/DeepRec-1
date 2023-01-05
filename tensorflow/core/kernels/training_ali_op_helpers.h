@@ -136,20 +136,20 @@ class ThreadCopyIdAllocator {
   }
 
   int64 GetCopyIdOfThread(int64 main_thread_id) {
-    int64 thread_id = Env::Default()->GetCurrentThreadId();
+    uint64 thread_id = Env::Default()->GetCurrentThreadId();
     auto thread_copy_iter = thread_copy_map_.find_wait_free(thread_id);
     if (thread_id == main_thread_id) {
       return num_worker_threads_;
     } else {
       if (thread_copy_iter.first == -1) {
         // bind a new thread to a local cursor_list
-        int copy_id = thread_id % num_worker_threads_;
+        unsigned int copy_id = thread_id % num_worker_threads_;
         while (!__sync_bool_compare_and_swap(
             &(is_occupy_flag_[copy_id]), false, true)) {
           copy_id = (copy_id + 1) % num_worker_threads_;
         }
         thread_copy_map_.insert_lockless(
-            std::move(std::pair<int64, int>(thread_id, copy_id)));
+            std::move(std::pair<uint64, unsigned int>(thread_id, copy_id)));
         return copy_id;
       } else {
           return thread_copy_iter.second;
@@ -160,7 +160,7 @@ class ThreadCopyIdAllocator {
  private:
   int num_worker_threads_;
   bool* is_occupy_flag_ = nullptr;
-  typedef google::dense_hash_map_lockless<int64, int> LockLessHashMap;
+  typedef google::dense_hash_map_lockless<uint64, unsigned int> LockLessHashMap;
   LockLessHashMap thread_copy_map_;
 };
 

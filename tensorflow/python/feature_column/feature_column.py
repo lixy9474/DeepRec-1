@@ -2627,7 +2627,8 @@ class _SharedEmbeddingColumn(
               'The feature_column library already adds a variable under the '
               'hood.'.format(shared_embedding_collection))
         embedding_weights = shared_embedding_collection[0]
-        if embedding_weights.get_shape() != embedding_shape:
+        from tensorflow.python.feature_column import feature_column_v2 as fc_new
+        if embedding_weights.get_shape() != embedding_shape and not isinstance(self.categorical_column, fc_new.EmbeddingCategoricalColumn):
           raise ValueError(
               'Shared embedding collection {} contains variable {} of '
               'unexpected shape {}. Expected shape is {}. '

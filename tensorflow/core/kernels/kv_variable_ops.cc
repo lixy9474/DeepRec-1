@@ -763,8 +763,8 @@ class KvResourceGatherGPUOp : public OpKernel {
             memcpy_address, &init_cursor_list,
             &copyback_cursor_list, main_thread_id,
             num_threads] (int64 start, int64 limit) {
-          int64 thread_id = Env::Default()->GetCurrentThreadId();
-          int position;
+          uint64 thread_id = Env::Default()->GetCurrentThreadId();
+          unsigned int position;
           if (thread_id == main_thread_id) {
             position = num_threads;
           } else {
@@ -777,7 +777,7 @@ class KvResourceGatherGPUOp : public OpKernel {
                 position = (position + 1) % num_threads;
             }
               hash_map_.insert_lockless(
-                        std::move(std::pair<int64, int>(thread_id, position)));
+                        std::move(std::pair<uint64, unsigned int>(thread_id, position)));
             } else {
               position = iter.second;
             }
@@ -851,7 +851,7 @@ class KvResourceGatherGPUOp : public OpKernel {
     std::function<
       TValue*(TValue*, TKey, int64, int64, int64)> get_default_v_fn_;
     std::function<int32(int32*, int64)> get_count_fn_;
-    typedef google::dense_hash_map_lockless<int64, int> LockLessHashMap;
+    typedef google::dense_hash_map_lockless<uint64, unsigned int> LockLessHashMap;
     LockLessHashMap hash_map_;
     bool* occupy_flag_ = nullptr;
     mutex m_init_occupy_flag_;
