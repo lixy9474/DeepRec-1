@@ -23,6 +23,10 @@ class ValuePtr;
 template <class K, class V>
 class EmbeddingVar;
 
+namespace {
+extern char* kInferenceMode;
+}
+
 namespace embedding {
 
 struct StorageConfig {
@@ -225,11 +229,16 @@ class StorageManager {
         LOG(INFO) << "Use StorageManager::LFU in multi-tier EV " << name_;
         cache_ = new LFUCache<K>();
       }
-      eviction_thread_ = Env::Default()->StartThread(
-          ThreadOptions(), "EV_Eviction", [this]() { BatchEviction(); });
-      thread_pool_.reset(
-          new thread::ThreadPool(Env::Default(), ThreadOptions(),
-            "MultiLevel_Embedding_Cache", 2, /*low_latency_hint=*/false));
+      bool is_inference;
+      TF_CHECK_OK(ReadBoolFromEnvVar(kInferenceMode, false, &is_inference));
+
+      if (!is_inference) {
+        eviction_thread_ = Env::Default()->StartThread(
+            ThreadOptions(), "EV_Eviction", [this]() { BatchEviction(); });
+        thread_pool_.reset(
+            new thread::ThreadPool(Env::Default(), ThreadOptions(),
+              "MultiLevel_Embedding_Cache", 2, /*low_latency_hint=*/false));
+      }
     }
   }
 

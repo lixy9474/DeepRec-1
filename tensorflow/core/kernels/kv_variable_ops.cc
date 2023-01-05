@@ -51,7 +51,7 @@ namespace tensorflow {
 namespace {
 const int64 kEmbeddingVarUseDB = -214;
 const int64 kInitializableEmbeddingVarUseDB = -215;
-const char* kInferenceMode = "INFERENCE_MODE";
+char* kInferenceMode = "INFERENCE_MODE";
 }
 
 #define REGISTER_KV_VAR_HANDLE(ktype, vtype)                           \
@@ -583,7 +583,7 @@ class KvResourceGatherOp : public OpKernel {
             worker_threads->workers, indices_size,
             slice_bytes, do_work);
       embedding::BatchCache<TKey>* cache = ev->Cache();
-      if (cache) {
+      if (cache && !is_inference_) {
         ev->storage_manager()->Schedule([ev, indices]() {
           embedding::BatchCache<TKey>* cache = ev->Cache();
             cache->add_to_rank(indices);
