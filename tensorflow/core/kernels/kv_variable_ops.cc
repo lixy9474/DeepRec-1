@@ -789,6 +789,14 @@ class KvResourceGatherOp : public OpKernel {
         ev->storage_manager()->Schedule([ev, indices]() {
           embedding::BatchCache<TKey>* cache = ev->Cache();
           cache->add_to_rank(indices);
+          bool is_log_cache;
+          TF_CHECK_OK(ReadBoolFromEnvVar("TF_EV_LOG_CACHE", false,
+          &is_log_cache));
+          if (is_log_cache) {
+            LOG(INFO)<<"cache size: "<<cache->size();
+            LOG(INFO)<<cache->DebugString();
+            cache->reset_status();
+          }
         });
       }
     }
