@@ -1717,6 +1717,69 @@ TEST(KVInterfaceTest, TestSSDKVCompaction) {
   }
 }
 
+void lookup_ssd(
+    SSDHashKV<int64, float>* hashmap,
+    std::vector<int64>& access_seq,
+    int64 thread_id, int64 num_threads) {
+  int64 num_task = access_seq.size() / num_threads;
+  int64 offset = thread_id * num_task;
+  for (int64 i = offset; i < offset + num_task; i++) {
+    ValuePtr<float>* value_ptr = nullptr;
+    hashmap->Lookup(access_seq[i], &value_ptr);
+  }
+}
+
+TEST(KVInterfaceTest, BenchSSDHash) {
+  const int64 filenum = 5;
+  int64 emb_dim = 12;
+  int64 num_of_ids = (1 << 27 - 6) * filenum;
+
+  LOG(INFO)<<"num_of_ids: "<<num_of_ids;
+
+  std::string temp_dir = testing::TmpDir();
+  auto hashmap = new SSDHashKV<int64, float>(
+      temp_dir, ev_allocator());
+  hashmap->SetTotalDims(emb_dim);
+
+  std::vector<int64> ids(num_of_ids);
+  std::srand(std::time(nullptr));
+  for (int64 i = 0; i < num_of_ids; i++) {
+    ids[i] = i;
+  }
+  LOG(INFO)<<"Finish generating ids.";
+  double t0 = getResident()*getpagesize()/1024.0/1024.0;
+
+  SingleCommit(hashmap, ids, 2);
+  LOG(INFO)<<"Finish committing ids.";
+  double t1 = getResident()*getpagesize()/1024.0/1024.0;
+  LOG(INFO)<<"Mem berfore commit: "<<t0<<", after commit: "<<t1<<", delta: "<<t1 - t0;
+  int steps = 1000;
+  int64 batch_size = 1024;
+  std::vector<int64> access_seq(batch_size);
+  int64 num_threads = 1;
+  std::thread threads[32];
+  t0 = getResident()*getpagesize()/1024.0/1024.0;
+  uint64 lookup_time = 0;
+  for (int64 i = 0; i < steps; i++) {
+    int64 index = rand() % num_of_ids;
+    access_seq[i] = ids[index];
+    uint64 start = Env::Default()->NowNanos();
+    for (int64 i = 0; i < num_threads; i++) {
+      threads[i] = std::thread(lookup_ssd, hashmap, std::ref(access_seq), i, num_threads);
+    }
+    for (int64 i = 0; i < num_threads; i++) {
+      threads[i].join();
+    }
+    uint64 end = Env::Default()->NowNanos();
+    lookup_time += (end - start)/1000;
+  }
+  LOG(INFO)<<"Average time of "<< steps<<" step: "<<lookup_time/steps<<"us";
+  t1 = getResident()*getpagesize()/1024.0/1024.0;
+  LOG(INFO)<<"Mem berfore lookup: "<<t0<<", after lookup: "<<t1<<", delta: "<<t1 - t0;
+
+  delete hashmap;
+}
+
 } // namespace
 } // namespace embedding
 } // namespace tensorflow

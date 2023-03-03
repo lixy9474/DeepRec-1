@@ -104,6 +104,11 @@ class EmbFile {
              std::ios::out |
              std::ios::binary);
     fd_ = open(filepath_.data(), O_RDONLY);
+    bool is_map_file;
+    TF_CHECK_OK(ReadBoolFromEnvVar("TF_MAP_FILE_WHEN_CREATE", false,
+          &is_map_file));
+    if (is_map_file)
+      Map();
     CHECK(fs_.good());
   }
 
@@ -118,6 +123,11 @@ class EmbFile {
              std::ios::out |
              std::ios::binary);
     fd_ = open(filepath_.data(), O_RDONLY);
+    bool is_map_file;
+    TF_CHECK_OK(ReadBoolFromEnvVar("TF_MAP_FILE_WHEN_CREATE", false,
+          &is_map_file));
+    if (is_map_file)
+      Unmap();
     CHECK(fs_.good());
   }
 
@@ -463,8 +473,16 @@ class SSDHashKV : public KVInterface<K, V> {
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
       EmbPosition* posi = iter.second;
       if (posi->flushed_) {
-        emb_files_[posi->version_]->Read((char*)(val->GetPtr()),
-            val_len_, posi->offset_);
+        bool is_map_file;
+        TF_CHECK_OK(ReadBoolFromEnvVar("TF_MAP_FILE_WHEN_CREATE", false,
+            &is_map_file));
+        if (is_map_file) {
+          emb_files_[posi->version_]->ReadWithoutMap((char*)(val->GetPtr()),
+              val_len_, posi->offset_);
+        } else {
+          emb_files_[posi->version_]->Read((char*)(val->GetPtr()),
+              val_len_, posi->offset_);
+        }
       } else {
         memcpy((char*)val->GetPtr(),
             write_buffer_ + posi->buffer_offset_, val_len_);
@@ -886,6 +904,7 @@ class SSDHashKV : public KVInterface<K, V> {
     //These parameter that can be adjusted in the future
     if (hash_size * 3 / 2 < total_app_count_ ||
         total_app_count_ - hash_size > CAP_INVALID_ID) {
+      LOG(INFO)<<hash_size<<", "<<total_app_count_;
       DeleteInvalidRecord();
       // delete the evict_files
       DeleteInvalidFiles();
