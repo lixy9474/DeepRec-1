@@ -683,6 +683,10 @@ class EmbeddingVar : public ResourceBase {
   GPUHashTable<K, V>* HashTable() {
     return storage_manager_->HashTable();
   }
+  
+  std::string name() {
+    return name_;
+  }
 
  protected:
   FilterPolicy<K, V, EmbeddingVar<K, V>>* GetFilter() const {

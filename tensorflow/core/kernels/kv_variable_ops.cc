@@ -793,8 +793,8 @@ class KvResourceGatherOp : public OpKernel {
           TF_CHECK_OK(ReadBoolFromEnvVar("TF_EV_LOG_CACHE", false,
           &is_log_cache));
           if (is_log_cache) {
-            LOG(INFO)<<"cache size: "<<cache->size();
-            LOG(INFO)<<cache->DebugString();
+            LOG(INFO)<<"cache size of "<<ev->name()<<": "<<cache->size();
+            LOG(INFO)<<"Debug message of "<<ev->name()<<": "<<cache->DebugString();
             cache->reset_status();
           }
         });
