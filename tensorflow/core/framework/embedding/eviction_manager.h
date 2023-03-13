@@ -44,7 +44,7 @@ class EvictionManager {
           &num_of_threads_));
     thread_pool_.reset(
         new thread::ThreadPool(Env::Default(), ThreadOptions(),
-          "EVICTION_MANAGER", 3, /*low_latency_hint=*/false));
+          "EVICTION_MANAGER", num_of_threads_, /*low_latency_hint=*/false));
   }
   
   ~EvictionManager() {
@@ -90,19 +90,15 @@ class EvictionManager {
   }
 
   bool CheckStorages() {
-    mutex_lock l(mu_);
-    for (auto it = storage_table_.begin(); it != storage_table_.end();) {
+    for (auto it = storage_table_.begin(); it != storage_table_.end(); it++) {
       if (!(it->second)->is_deleted) 
         return true;
-      else 
-        it = storage_table_.erase(it);
     }
     return false;
   }
 
   void EvictionLoop() {
     while (CheckStorages()) {
-      mutex_lock l(mu_);
       for (auto it : storage_table_) {
         auto storage = it.first;
         auto storage_item = it.second;

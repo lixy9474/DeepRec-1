@@ -385,6 +385,7 @@ class SSDHashKV : public KVInterface<K, V> {
       ssd_rec_desc->key_file_id_list.emplace_back(ssd_iter->FileId());
       ssd_rec_desc->key_offset_list.emplace_back(ssd_iter->Offset());
     }
+    delete ssd_iter;
     ssd_rec_desc->file_prefix = path_;
 
     for (auto file: emb_files_) {

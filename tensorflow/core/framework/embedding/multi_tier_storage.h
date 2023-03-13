@@ -69,6 +69,11 @@ class MultiTierStorage : public Storage<K, V> {
 
       cache_capacity_ = Storage<K, V>::storage_config_.size[0]
                         / (Storage<K, V>::total_dims_ * sizeof(V));
+      bool is_log_cache;
+      TF_CHECK_OK(ReadBoolFromEnvVar("TF_EV_LOG_CACHE", false,
+          &is_log_cache));
+      if (is_log_cache)
+        LOG(INFO)<<"cache capcity of "<<name_<<": "<<cache_capacity_;
       ready_eviction_ = true;
     }
     Storage<K, V>::flag_.clear(std::memory_order_release);
@@ -264,7 +269,7 @@ class MultiTierStorage : public Storage<K, V> {
   }
 
   virtual void BatchEviction() {
-    constexpr int EvictionSize = 10000;
+    constexpr int EvictionSize = 100000;
     K evic_ids[EvictionSize];
     if (!ready_eviction_)
       return;
