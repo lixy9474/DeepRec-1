@@ -202,6 +202,10 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
                     file_id_map);
   }
 
+  void SetEmbeddingFileSize(int64 embedding_file_size) override {
+    reinterpret_cast<SSDHashKV<K, V>*>(ssd_kv_)->SetBufferSize(embedding_file_size);
+  }
+
  protected:
   void SetTotalDims(int64 total_dims) override {
     ssd_kv_->SetTotalDims(total_dims);

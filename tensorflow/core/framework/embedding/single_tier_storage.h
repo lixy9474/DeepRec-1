@@ -165,6 +165,10 @@ class SingleTierStorage : public Storage<K, V> {
     LOG(FATAL) << "Unsupport InitCache in SingleTierStorage.";
   }
 
+  void SetEmbeddingFileSize(int64 embedding_file_size) override {
+    LOG(FATAL) << "Unsupport SetEmbeddingFileSize in SingleTierStorage.";
+  }
+
   Status BatchCommit(const std::vector<K>& keys,
       const std::vector<ValuePtr<V>*>& value_ptrs) override {
     LOG(FATAL) << "Unsupport BatchCommit in Storage:"

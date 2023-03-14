@@ -124,6 +124,7 @@ class Storage {
   }
 
   virtual void InitCache(embedding::CacheStrategy cache_strategy) = 0;
+  virtual void SetEmbeddingFileSize(int64 embedding_file_size) = 0;
   virtual int64 CacheSize() const = 0;
   virtual BatchCache<K>* Cache() = 0;
   virtual bool IsMultiLevel() = 0;

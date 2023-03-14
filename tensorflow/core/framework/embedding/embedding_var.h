@@ -479,6 +479,10 @@ class EmbeddingVar : public ResourceBase {
     storage_manager_->InitCache(cache_strategy);
   }
 
+  void SetEmbeddingFileSize(int64 embedding_file_size) {
+    storage_manager_->SetEmbeddingFileSize(embedding_file_size);
+  }
+
   std::string DebugString() const {
     return emb_config_.DebugString();
   }

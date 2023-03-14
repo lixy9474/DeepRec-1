@@ -58,6 +58,10 @@ class StorageManager {
     storage_->InitCache(cache_strategy);
   }
 
+  void SetEmbeddingFileSize(int64 embedding_file_size) {
+    storage_->SetEmbeddingFileSize(embedding_file_size);
+  }
+
   int64 GetAllocLen(){
     return storage_->GetAllocLen();
   }

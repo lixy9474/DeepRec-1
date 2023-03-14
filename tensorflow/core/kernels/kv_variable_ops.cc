@@ -476,6 +476,46 @@ TF_CALL_GPU_NUMBER_TYPES(REGISTER_KERNELS_GPU)
 #undef REGISTER_KERNELS
 
 template <typename TKey, typename TValue>
+class KvResourceSetEmbeddingFileSizeOp : public OpKernel {
+ public:
+  explicit KvResourceSetEmbeddingFileSizeOp(OpKernelConstruction* c) : OpKernel(c) {
+    OP_REQUIRES_OK(c, c->GetAttr("embedding_file_size", &embedding_file_size_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    EmbeddingVar<TKey, TValue>* ev = nullptr;
+    OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &ev));
+    core::ScopedUnref unref_me(ev);
+    ev->SetEmbeddingFileSize(embedding_file_size_);
+  }
+
+ private:
+  int64 embedding_file_size_;
+};
+
+#define REGISTER_KERNELS(dev, ktype, vtype)                        \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceSetEmbeddingFileSizeOp")    \
+                          .TypeConstraint<ktype>("Tkeys")          \
+                          .TypeConstraint<vtype>("dtype")          \
+                          .Device(DEVICE_##dev),                   \
+                          KvResourceSetEmbeddingFileSizeOp<ktype, vtype>);
+#define REGISTER_KERNELS_ALL(dev, type)                            \
+  REGISTER_KERNELS(dev, int32, type)                               \
+  REGISTER_KERNELS(dev, int64, type)
+#define REGISTER_KERNELS_CPU(type) REGISTER_KERNELS_ALL(CPU, type)
+TF_CALL_REAL_NUMBER_TYPES(REGISTER_KERNELS_CPU)
+#undef REGISTER_KERNELS_CPU
+
+#if GOOGLE_CUDA
+#define REGISTER_KERNELS_GPU(type) REGISTER_KERNELS_ALL(GPU, type)
+TF_CALL_GPU_NUMBER_TYPES(REGISTER_KERNELS_GPU)
+#undef REGISTER_KERNELS_GPU
+#endif  // GOOGLE_CUDA
+
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+
+template <typename TKey, typename TValue>
 class KvResourceLookupIDOp : public OpKernel {
  public:
   explicit KvResourceLookupIDOp(OpKernelConstruction* c) : OpKernel(c) {

@@ -188,6 +188,13 @@ REGISTER_OP("KvResourceInitCacheStrategyOp")
     .Attr("dtype: {float32, double}")
     .SetShapeFn([](InferenceContext* c){return Status::OK();});
 
+REGISTER_OP("KvResourceSetEmbeddingFileSizeOp")
+    .Input("resource: resource")
+    .Attr("embedding_file_size: int = 134217728")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("dtype: {float32, double}")
+    .SetShapeFn([](InferenceContext* c){return Status::OK();});
+
 Status KvVariableShapeShapeFn(InferenceContext* c) {
   auto* handle_data = c->input_handle_shapes_and_types(0);
   if (handle_data == nullptr || handle_data->empty()) {

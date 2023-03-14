@@ -94,6 +94,10 @@ class MultiTierStorage : public Storage<K, V> {
     cache_thread_pool_ = CacheThreadPoolCreator::Create();
   }
 
+  virtual void SetEmbeddingFileSize(int64 embedding_file_size) override {
+    LOG(FATAL) << "Unsupport SetEmbeddingFileSize in MultiTierStorage.";
+  }
+
   void CopyEmbeddingsFromCPUToGPU(
       int total, const K* keys,
       const std::list<int64>& copyback_cursor,

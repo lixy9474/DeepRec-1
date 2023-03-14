@@ -364,6 +364,11 @@ class SSDHashKV : public KVInterface<K, V> {
   void SetTotalDims(int total_dims) override {
     total_dims_ = total_dims;
     val_len_ = sizeof(FixedLengthHeader) + total_dims_ * sizeof(V);
+  }
+
+  void SetBufferSize(int64 buffer_size) {
+    BUFFER_SIZE = buffer_size;
+    emb_files_[0]->file_size_ = buffer_size;
     max_app_count_ = BUFFER_SIZE / val_len_;
     write_buffer_ = new char[BUFFER_SIZE];
     unsigned int max_key_count = 1 + int(BUFFER_SIZE / val_len_);
@@ -958,7 +963,7 @@ class SSDHashKV : public KVInterface<K, V> {
   static constexpr int EMPTY_KEY = -1;
   static constexpr int CAP_INVALID_POS = 200000;
   static constexpr int CAP_INVALID_ID = 10000000;
-  static constexpr size_t BUFFER_SIZE = 1 << 27;
+  size_t BUFFER_SIZE = 1 << 27;
 
   std::vector<EmbFile*> emb_files_;
   std::deque<EmbPosition*> pos_out_of_date_;

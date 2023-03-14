@@ -293,6 +293,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     self._default_value_dim = evconfig.default_value_dim
     self._default_value_no_permission = evconfig.default_value_no_permission
     self._storage_cache_strategy = evconfig.storage_cache_strategy
+    self._embedding_file_size = evconfig.embedding_file_size
 
     if self._primary is None:
       self._is_primary = True
@@ -420,12 +421,21 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
 
             if self._is_primary and is_multi_tier(self._storage_type):
               with ops.control_dependencies([self._init_op]):
-                self._set_cache_strategy_op = gen_kv_variable_ops.kv_resource_init_cache_strategy_op(
-                  self._handle,
-                  cache_strategy=self._storage_cache_strategy,
-                  Tkeys=self._invalid_key_type,
-                  dtype=self._dtype
-                )
+                if self._storage_type in [config_pb2.StorageType.DRAM_SSDHASH,
+                                          config_pb2.StorageType.HBM_DRAM_SSDHASH]:
+                  set_emebdding_file_size_op = gen_kv_variable_ops.kv_resource_set_embedding_file_size_op(
+                    self._handle,
+                    embedding_file_size=self._embedding_file_size,
+                    Tkeys=self._invalid_key_type,
+                    dtype=self._dtype
+                  )
+                with ops.control_dependencies([set_emebdding_file_size_op]): 
+                  self._set_cache_strategy_op = gen_kv_variable_ops.kv_resource_init_cache_strategy_op(
+                    self._handle,
+                    cache_strategy=self._storage_cache_strategy,
+                    Tkeys=self._invalid_key_type,
+                    dtype=self._dtype
+                  )
               set_attr_ops.append(self._set_cache_strategy_op)
             with ops.control_dependencies(set_attr_ops + [self._init_op]):
               self._initializer_op = control_flow_ops.no_op()
