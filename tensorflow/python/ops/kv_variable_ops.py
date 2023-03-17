@@ -421,6 +421,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
 
             if self._is_primary and is_multi_tier(self._storage_type):
               with ops.control_dependencies([self._init_op]):
+                set_emebdding_file_size_op = control_flow_ops.no_op()
                 if self._storage_type in [config_pb2.StorageType.DRAM_SSDHASH,
                                           config_pb2.StorageType.HBM_DRAM_SSDHASH]:
                   set_emebdding_file_size_op = gen_kv_variable_ops.kv_resource_set_embedding_file_size_op(

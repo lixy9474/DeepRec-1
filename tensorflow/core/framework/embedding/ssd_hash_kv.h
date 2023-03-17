@@ -689,8 +689,7 @@ class SSDHashKV : public KVInterface<K, V> {
   void AppendToWriteBuffer(size_t curr_buffer_offset, K key,
                             const ValuePtr<V>* value_ptr) {
     current_offset_ += val_len_;
-    memcpy(write_buffer_ + curr_buffer_offset,
-        (char*)value_ptr->GetPtr(), val_len_);
+    value_ptr->DumpToBuffer(write_buffer_ + curr_buffer_offset, val_len_);
     key_buffer_[buffer_cur_] = key;
     ++buffer_cur_;
   }

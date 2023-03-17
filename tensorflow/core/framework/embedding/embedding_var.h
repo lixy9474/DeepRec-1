@@ -89,7 +89,8 @@ class EmbeddingVar : public ResourceBase {
         default_tensor.NumElements() / emb_config_.default_value_dim;
 
     if (LayoutType::NORMAL_CONTIGUOUS == storage_manager_->GetLayoutType() ||
-        LayoutType::NORMAL_CONTIGUOUS_GPU == storage_manager_->GetLayoutType()) {
+        LayoutType::NORMAL_CONTIGUOUS_GPU == storage_manager_->GetLayoutType() ||
+        LayoutType::NORMAL_DYNAMIC_CONTIGUOUS == storage_manager_->GetLayoutType()) {
       storage_manager_->SetAllocLen(value_len_, emb_config_.slot_num + 1);
     }
 
@@ -222,6 +223,15 @@ class EmbeddingVar : public ResourceBase {
     ValuePtr<V>* value_ptr = nullptr;
     filter_->LookupOrCreate(key, val, default_value_ptr, &value_ptr, count,
                             default_value_no_permission_);
+    add_freq_fn_(value_ptr, count, emb_config_.filter_freq);
+  }
+
+  void LookupOrCreate(K key, V* val, V* default_v, bool* is_filtered, int count = 1)  {
+    const V* default_value_ptr =
+      (default_v == nullptr) ? default_value_ : default_v;
+    ValuePtr<V>* value_ptr = nullptr;
+    filter_->LookupOrCreate(key, val, default_value_ptr, &value_ptr, count,
+                            default_value_no_permission_, is_filtered);
     add_freq_fn_(value_ptr, count, emb_config_.filter_freq);
   }
 

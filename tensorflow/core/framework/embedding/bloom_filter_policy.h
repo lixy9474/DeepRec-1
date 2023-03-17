@@ -80,6 +80,22 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
     }
   }
 
+  void LookupOrCreate(K key, V* val, const V* default_value_ptr,
+                      ValuePtr<V>** value_ptr, int count,
+                      const V* default_value_no_permission,
+                      bool* is_filtered) override {
+    if (GetBloomFreq(key) >= config_.filter_freq) {
+      *is_filtered = true;
+      TF_CHECK_OK(ev_->LookupOrCreateKey(key, value_ptr));
+      V* mem_val = ev_->LookupOrCreateEmb(*value_ptr, default_value_ptr);
+      memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
+    } else {
+      *is_filtered = false;
+      AddFreq(key, count);
+      memcpy(val, default_value_no_permission, sizeof(V) * ev_->ValueLen());
+    }
+  }
+
   void CopyEmbeddingsToBuffer(
       V* val_base, int64 size,
       int64 slice_elems, int64 value_len,

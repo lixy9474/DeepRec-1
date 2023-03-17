@@ -188,7 +188,13 @@ class InitializeKvVariableOp : public OpKernel {
             storage_type == embedding::HBM_DRAM_SSDHASH) {
           layout_ = "normal_contiguous_gpu";
         } else {
-          layout_ = "normal_contiguous";
+          if(filter_freq_ != 0) {
+            LOG(INFO)<<"use "<<"normal_dynamic_contiguous";
+            layout_ = "normal_dynamic_contiguous";
+          } else {
+            LOG(INFO)<<"use "<<"normal_contiguous";
+            layout_ = "normal_contiguous";
+          }        
         }
       }
     } else {
@@ -753,17 +759,27 @@ class KvResourceGatherOp : public OpKernel {
     }
     if (!is_inference_) {
       lookup_fn_ = [](EmbeddingVar<TKey, TValue>* ev, TKey key,
-                      TValue* val, TValue* default_v, int count) {
-        ev->LookupOrCreate(key, val, default_v, count);
+                      TValue* val, TValue* default_v, int count,
+                      bool* is_filtered) {
+        ev->LookupOrCreate(key, val, default_v, is_filtered, count);
         return Status::OK();
       };
     } else {
       lookup_fn_ = [](EmbeddingVar<TKey, TValue>* ev, TKey key,
-                      TValue* val, TValue* default_v, int count) {
+                      TValue* val, TValue* default_v, int count,
+                      bool* is_filtered) {
         Status s = ev->Lookup(key, val, default_v);
         return s;
       };
     }
+    int num_worker_threads = c->device()
+                             ->tensorflow_cpu_worker_threads()
+                             ->num_threads;
+    thread_copy_id_alloc_ = new ThreadCopyIdAllocator(num_worker_threads);
+  }
+
+  ~KvResourceGatherOp(){
+    delete thread_copy_id_alloc_;
   }
 
   void Compute(OpKernelContext* c) override {
@@ -807,28 +823,41 @@ class KvResourceGatherOp : public OpKernel {
               "MultiLevel EV's Cache size ", ev->CacheSize(),
               " should large than IDs in batch ", N));
       const size_t slice_bytes = slice_elems * sizeof(TValue);
+      auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
+      int64 num_worker_threads = worker_threads->num_threads;
+      std::vector<std::vector<TKey>> filtered_lists(num_worker_threads + 1);
+      uint64 main_thread_id = Env::Default()->GetCurrentThreadId();
       auto do_work = [this, indices_flat,
-           out_base, slice_elems, c, default_v, ev, counts] (
+           out_base, slice_elems, c, default_v, ev, counts,
+           main_thread_id, &filtered_lists] (
                int64 start, int64 limit) {
+        int copy_id =
+            thread_copy_id_alloc_->GetCopyIdOfThread(main_thread_id);
+        filtered_lists[copy_id].reserve(limit - start);
         for (int64 i = start; i < limit; ++i) {
           TValue* default_v_ptr = get_default_v_fn_(
               default_v, indices_flat(i), i, ev->GetDefaultValueDim(),
               ev->ValueLen());
           int32 count = get_count_fn_(counts, i);
+          bool is_filtered = true;
           OP_REQUIRES_OK(c, lookup_fn_(ev, indices_flat(i),
-              out_base + i * slice_elems, default_v_ptr, count));
+              out_base + i * slice_elems, default_v_ptr, count, &is_filtered));
+          if (ev->IsMultiLevel() && is_filtered) {
+            filtered_lists[copy_id].emplace_back(indices_flat(i));
+          }
         }
       };
-      auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
-      Shard(worker_threads->num_threads,
+      Shard(num_worker_threads,
             worker_threads->workers, indices_size,
             slice_bytes, do_work);
 
       if (ev->IsMultiLevel()) {
         embedding::BatchCache<TKey>* cache = ev->Cache();
-        ev->storage_manager()->Schedule([ev, indices]() {
+        ev->storage_manager()->Schedule([ev, filtered_lists]() {
           embedding::BatchCache<TKey>* cache = ev->Cache();
-          cache->add_to_rank(indices);
+          for (auto filtered_list : filtered_lists) {
+            cache->add_to_rank(filtered_list.data(), filtered_list.size());
+          }
           bool is_log_cache;
           TF_CHECK_OK(ReadBoolFromEnvVar("TF_EV_LOG_CACHE", false,
           &is_log_cache));
@@ -849,7 +878,9 @@ class KvResourceGatherOp : public OpKernel {
       TValue*(TValue*, TKey, int64, int64, int64)> get_default_v_fn_;
     std::function<int32(int32*, int64)> get_count_fn_;
     std::function<Status(EmbeddingVar<TKey, TValue>* ev,
-      TKey key, TValue* val, TValue* default_v, int count)> lookup_fn_;
+        TKey key, TValue* val, TValue* default_v, int count,
+        bool* is_filtered)> lookup_fn_;
+    ThreadCopyIdAllocator* thread_copy_id_alloc_ = nullptr;
 };
 
 #define REGISTER_KERNELS(dev, ktype, vtype)                       \

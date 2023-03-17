@@ -46,7 +46,9 @@ struct StorageConfig {
       layout_type = LayoutType::NORMAL_CONTIGUOUS;
     } else if ("normal_contiguous_gpu" == layout){
       layout_type = LayoutType::NORMAL_CONTIGUOUS_GPU;
-    } else {
+    } else if ("normal_dynamic_contiguous" == layout) {
+      layout_type = LayoutType::NORMAL_DYNAMIC_CONTIGUOUS;
+    }else {
       LOG(WARNING) << "Unknown layout: "
         << layout << ", use LayoutType::NORMAL by default.";
       layout_type = LayoutType::NORMAL;

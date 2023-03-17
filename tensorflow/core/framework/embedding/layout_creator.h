@@ -63,6 +63,14 @@ class NormalContiguousGPULayoutCreator : public LayoutCreator<V> {
   }
 };
 
+template<typename V>
+class NormalDynamicContiguousLayoutCreator : public LayoutCreator<V> {
+ public:
+  ValuePtr<V>* Create(Allocator* alloc, size_t size) override {
+    return new NormalDynamicContiguousValuePtr<V>(alloc, size);
+  }
+};
+
 class LayoutCreatorFactory {
  public:
   template<typename V>
@@ -81,6 +89,10 @@ class LayoutCreatorFactory {
         static NormalContiguousGPULayoutCreator<V>
                    normal_contiguous_gpu_creator;
         return &normal_contiguous_gpu_creator;
+      case LayoutType::NORMAL_DYNAMIC_CONTIGUOUS:
+        static NormalDynamicContiguousLayoutCreator<V>
+                   normal_dynamic_contiguous_creator;
+        return &normal_dynamic_contiguous_creator;
       default:
         static NormalLayoutCreator<V> default_creator;
         return &default_creator;

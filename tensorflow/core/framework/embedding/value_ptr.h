@@ -18,7 +18,8 @@ enum class LayoutType {
   NORMAL,
   LEVELDB,
   NORMAL_CONTIGUOUS,
-  NORMAL_CONTIGUOUS_GPU
+  NORMAL_CONTIGUOUS_GPU,
+  NORMAL_DYNAMIC_CONTIGUOUS
 };
 
 namespace {
@@ -303,7 +304,11 @@ class ValuePtr {
   }
 
   virtual void SetPtr(V* ptr) {
-    LOG(FATAL) << "Unsupport SetInitialized in subclass of ValuePtrBase";
+    LOG(FATAL) << "Unsupport SetPtr in subclass of ValuePtrBase";
+  }
+
+  virtual void DumpToBuffer(char* buffer, int64 value_len) const {
+     LOG(FATAL) << "Unsupport DumpToBuffer in subclass of ValuePtrBase";
   }
 
  protected:
@@ -444,6 +449,103 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
       *((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) = val;
     }
   }
+
+  void DumpToBuffer(char* buffer, int64 value_len) const {
+    memcpy(buffer, (char*)this->ptr_, value_len);
+  }
+};
+
+
+template <class V>
+class NormalDynamicContiguousValuePtr : public ValuePtr<V> {
+ public:
+  NormalDynamicContiguousValuePtr(Allocator* allocator, size_t size):
+      alloc_(allocator), total_dims_(size) {
+    this->ptr_ = (void*) malloc(sizeof(FixedLengthHeader) + sizeof(V*));
+    *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) = nullptr;
+    new ((char*)this->ptr_) FixedLengthHeader();
+  }
+
+  ~NormalDynamicContiguousValuePtr() {
+    free(this->ptr_);
+  }
+
+  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len,
+      const V* default_v, int emb_index, int offset) override {
+    int8 meta = *((int8*)((char*)this->ptr_ + 6));
+    std::bitset<8> bs(meta);
+    if (!bs.test(emb_index)) {
+      while(this->flag_.test_and_set(std::memory_order_acquire));
+      if (bs.test(emb_index)) {
+        return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) + offset;
+      }
+      V* tensor_val = GetPtr();
+      if (tensor_val == nullptr) {
+        *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader)) =
+            (V*)alloc_->AllocateRaw(Allocator::kAllocatorAlignment, sizeof(V) * total_dims_);
+        tensor_val = GetPtr();
+      }
+      memcpy(tensor_val + offset, default_v, sizeof(V) * value_len);
+      ((FixedLengthHeader*)this->ptr_)->SetInitialized(emb_index);
+      this->flag_.clear(std::memory_order_release);
+      return tensor_val + offset;
+    } else {
+      return GetPtr() + offset;
+    }
+  }
+
+  // simple getter for V* and version
+  virtual V* GetValue(int emb_index, int offset) {
+    int8 meta = *((int8*)((char*)this->ptr_ + 6));
+    std::bitset<8> bs(meta);
+    if (bs.test(emb_index)) {
+      return GetPtr() + offset;
+    } else {
+      return nullptr;
+    }
+  }
+
+  virtual void Destroy(Allocator* allocator) {
+    if (GetPtr() != nullptr)
+      alloc_->DeallocateRaw(GetPtr());
+  }
+
+  int64 GetStep() {
+    return ((FixedLengthHeader*)this->ptr_)->GetGlobalStep();
+  }
+
+  void SetStep(int64 gs) {
+    ((FixedLengthHeader*)this->ptr_)->SetGlobalStep(gs);
+  }
+
+  int64 GetFreq() {
+    return ((FixedLengthHeader*)this->ptr_)->GetFreqCounter();
+  }
+
+  void SetFreq(int64 freq) {
+    ((FixedLengthHeader*)this->ptr_)->SetFreqCounter(freq);
+  }
+
+  void AddFreq() {
+    ((FixedLengthHeader*)this->ptr_)->AddFreq();
+  }
+
+  void AddFreq(int count) {
+    ((FixedLengthHeader*)this->ptr_)->AddFreq(count);
+  }
+  
+  V* GetPtr() const {
+    return *(V**)((char *)this->ptr_ + sizeof(FixedLengthHeader));
+  }
+
+  void DumpToBuffer(char* buffer, int64 value_len) const {
+    memcpy(buffer, (char*)this->ptr_, sizeof(FixedLengthHeader));
+    memcpy(buffer + sizeof(FixedLengthHeader), (char*)GetPtr(), value_len - sizeof(FixedLengthHeader));
+  }
+
+ private:
+  Allocator *alloc_;
+  int64 total_dims_;
 };
 
 template <class V>

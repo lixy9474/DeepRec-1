@@ -65,7 +65,8 @@ struct EmbeddingConfig {
       num_counter = 0;
     }
     if (layout == "normal_contiguous" ||
-        layout == "normal_contiguous_gpu") {
+        layout == "normal_contiguous_gpu" ||
+        layout == "normal_dynamic_contiguous") {
       normal_fix_flag = 1;
     }
   }
