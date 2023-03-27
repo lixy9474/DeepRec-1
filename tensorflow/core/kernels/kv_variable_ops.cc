@@ -825,15 +825,15 @@ class KvResourceGatherOp : public OpKernel {
       const size_t slice_bytes = slice_elems * sizeof(TValue);
       auto worker_threads = c->device()->tensorflow_cpu_worker_threads();
       int64 num_worker_threads = worker_threads->num_threads;
-      std::vector<std::vector<TKey>> filtered_lists(num_worker_threads + 1);
+      std::vector<std::vector<TKey>>* filtered_lists = new std::vector<std::vector<TKey>>(num_worker_threads + 1);
       uint64 main_thread_id = Env::Default()->GetCurrentThreadId();
       auto do_work = [this, indices_flat,
            out_base, slice_elems, c, default_v, ev, counts,
-           main_thread_id, &filtered_lists] (
+           main_thread_id, filtered_lists] (
                int64 start, int64 limit) {
         int copy_id =
             thread_copy_id_alloc_->GetCopyIdOfThread(main_thread_id);
-        filtered_lists[copy_id].reserve(limit - start);
+        (*filtered_lists)[copy_id].reserve(limit - start);
         for (int64 i = start; i < limit; ++i) {
           TValue* default_v_ptr = get_default_v_fn_(
               default_v, indices_flat(i), i, ev->GetDefaultValueDim(),
@@ -843,7 +843,7 @@ class KvResourceGatherOp : public OpKernel {
           OP_REQUIRES_OK(c, lookup_fn_(ev, indices_flat(i),
               out_base + i * slice_elems, default_v_ptr, count, &is_filtered));
           if (ev->IsMultiLevel() && is_filtered) {
-            filtered_lists[copy_id].emplace_back(indices_flat(i));
+            (*filtered_lists)[copy_id].emplace_back(indices_flat(i));
           }
         }
       };
@@ -855,7 +855,7 @@ class KvResourceGatherOp : public OpKernel {
         embedding::BatchCache<TKey>* cache = ev->Cache();
         ev->storage_manager()->Schedule([ev, filtered_lists]() {
           embedding::BatchCache<TKey>* cache = ev->Cache();
-          for (auto filtered_list : filtered_lists) {
+          for (auto filtered_list : *filtered_lists) {
             cache->add_to_rank(filtered_list.data(), filtered_list.size());
           }
           bool is_log_cache;
@@ -866,6 +866,7 @@ class KvResourceGatherOp : public OpKernel {
             LOG(INFO)<<"Debug message of "<<ev->name()<<": "<<cache->DebugString();
             cache->reset_status();
           }
+          delete filtered_lists;
         });
       }
     }

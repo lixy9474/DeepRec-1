@@ -97,6 +97,12 @@ class CounterFilterPolicy : public FilterPolicy<K, V, EV> {
     V* value_buff = (V*)restore_buff.value_buffer;
     int64* version_buff = (int64*)restore_buff.version_buffer;
     int64* freq_buff = (int64*)restore_buff.freq_buffer;
+    std::vector<K> admit_keys;
+    std::vector<int64> admit_freqs;
+    std::vector<int64> admit_versions;
+    admit_keys.reserve(key_num);
+    admit_freqs.reserve(key_num);
+    admit_versions.reserve(key_num);
     for (auto i = 0; i < key_num; ++i) {
       // this can describe by graph(Mod + DynamicPartition),
       // but memory waste and slow
@@ -126,10 +132,14 @@ class CounterFilterPolicy : public FilterPolicy<K, V, EV> {
            V* v = ev_->LookupOrCreateEmb(value_ptr,
                ev_->GetDefaultValue(key_buff[i]));
         }
+        admit_keys.emplace_back(key_buff[i]);
+        admit_freqs.emplace_back(value_ptr->GetFreq());
+        admit_versions.emplace_back(value_ptr->GetStep());
       }
     }
-    if (ev_->IsMultiLevel()) {
-      ev_->UpdateCache(key_buff, key_num, version_buff, freq_buff);
+    if (ev_->IsMultiLevel() && ev_->EmbIdx() == 0) {
+      ev_->UpdateCache(admit_keys.data(), admit_keys.size(),
+                       admit_versions.data(), admit_freqs.data());
     }
     return Status::OK();
   }

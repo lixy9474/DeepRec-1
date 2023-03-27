@@ -1751,6 +1751,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run([train_op], {ids:[1,2,4]})
         sess.run([train_op], {ids:[1,2,2]})
         sess.run([train_op], {ids:[1,2,5]})
+        time.sleep(1)
         if isinstance(var, kv_variable_ops.EmbeddingVariable):
           result = sess.run(tires)
           for i in range(0, 6):
@@ -1768,6 +1769,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
     with ops.Graph().as_default() as g, ops.device('/cpu:0'):
       db_directory = self.get_temp_dir()
       os.environ["TF_SSDHASH_ASYNC_COMPACTION"]="0"
+      os.environ["TF_EV_LOG_CACHE"]="1"
       storage_option = variables.StorageOption(
                         storage_type=config_pb2.StorageType.DRAM_SSDHASH,
                         storage_path=db_directory,
