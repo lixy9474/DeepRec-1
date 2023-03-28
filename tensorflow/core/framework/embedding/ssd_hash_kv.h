@@ -19,6 +19,7 @@ limitations under the License.
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <malloc.h>
 
 #include <fstream>
 #include <iomanip>
@@ -95,6 +96,14 @@ class EmbFile {
     app_count_(0),
     app_invalid_count_(0),
     is_deleted_(false) {
+    is_open_with_mmap_ = false;
+    TF_CHECK_OK(ReadBoolFromEnvVar("TF_SSDHASH_OPEN_FILE_WITH_MMAP", false,
+          &is_open_with_mmap_));
+    is_open_with_directio_ = false;
+    if (!is_open_with_mmap_) {
+      TF_CHECK_OK(ReadBoolFromEnvVar("TF_SSDHASH_OPEN_FILE_WITH_DIRECTIO", false,
+          &is_open_with_directio_));
+    }
     std::stringstream ss;
     ss << std::setw(4) << std::setfill('0') << ver << ".emb";
     filepath_ = path + ss.str();
@@ -103,7 +112,14 @@ class EmbFile {
              std::ios::in  |
              std::ios::out |
              std::ios::binary);
-    fd_ = open(filepath_.data(), O_RDONLY);
+    if (is_open_with_directio_) {
+      fd_ = open(filepath_.data(), O_RDONLY|O_DIRECT);
+    } else {
+      fd_ = open(filepath_.data(), O_RDONLY);
+    }
+    if (is_open_with_mmap_) {
+      Map();
+    }
     CHECK(fs_.good());
   }
 
@@ -111,13 +127,23 @@ class EmbFile {
     if (fs_.is_open()) {
       fs_.close();
     }
+    if (is_open_with_mmap_) {
+      Unmap();
+    }
     close(fd_);
     fs_.open(filepath_,
              std::ios::app |
              std::ios::in  |
              std::ios::out |
              std::ios::binary);
-    fd_ = open(filepath_.data(), O_RDONLY);
+    if (is_open_with_directio_) {
+      fd_ = open(filepath_.data(), O_RDONLY|O_DIRECT);
+    } else {
+      fd_ = open(filepath_.data(), O_RDONLY);
+    }
+    if (is_open_with_mmap_) {
+      Map();
+    }
     CHECK(fs_.good());
   }
 
@@ -125,6 +151,9 @@ class EmbFile {
     is_deleted_ = true;
     if (fs_.is_open()) {
       fs_.close();
+    }
+    if (is_open_with_mmap_) {
+      Unmap();
     }
     close(fd_);
     std::remove(filepath_.c_str());
@@ -148,11 +177,37 @@ class EmbFile {
   void ReadWithoutMap(char* val, const size_t val_len,
       const size_t offset) {
     memcpy(val, file_addr_ + offset, val_len);
+    int err = madvise(file_addr_, file_size_, MADV_DONTNEED);
+    if (err < 0) {
+      LOG(FATAL)<<"errno: "<<err;
+    }
+  }
+
+  void ReadWithDirectIo(char* val, const size_t val_len,
+      const size_t offset) {
+    size_t page_size = getpagesize();
+    int pages_to_read = val_len / page_size;
+    if (val_len % page_size != 0) {
+      pages_to_read += 1;
+    }
+    if (offset + val_len >= page_size * pages_to_read) {
+      pages_to_read += 1;
+    }
+    int aligned_offset = offset - (offset % page_size);
+    char* read_buffer = (char*)memalign(page_size, page_size * pages_to_read);
+
+    int status = pread(fd_, (void*)read_buffer, page_size * pages_to_read, aligned_offset);
+    if (status < 0) {
+      LOG(FATAL)<<"errno: "<<status;
+    }
+    memcpy(val, read_buffer + (offset % page_size), val_len);
+    free(read_buffer);
   }
 
   void Write(const char* val, const size_t val_len) {
     if (fs_.is_open()) {
       fs_.write(val, val_len);
+      posix_fadvise(fd_, 0, file_size_, POSIX_FADV_DONTNEED);
     } else {
       fs_.open(filepath_,
           std::ios::app | std::ios::in | std::ios::out |
@@ -163,10 +218,16 @@ class EmbFile {
   }
 
   void Read(char* val, const size_t val_len, const size_t offset) {
-    char* file_addr_tmp =
-        (char*)mmap(nullptr, file_size_, PROT_READ, MAP_PRIVATE, fd_, 0);
-    memcpy(val, file_addr_tmp + offset, val_len);
-    munmap((void*)file_addr_tmp, file_size_);
+    if (is_open_with_mmap_) {
+      ReadWithoutMap(val, val_len, offset);
+    } else if (is_open_with_directio_) {
+      ReadWithDirectIo(val, val_len, offset);
+    } else {
+      char* file_addr_tmp =
+          (char*)mmap(nullptr, file_size_, PROT_READ, MAP_PRIVATE, fd_, 0);
+      memcpy(val, file_addr_tmp + offset, val_len);
+      munmap((void*)file_addr_tmp, file_size_);
+    }
   }
 
  public:
@@ -179,6 +240,8 @@ class EmbFile {
   bool is_deleted_;
   std::string filepath_;
   std::fstream fs_;
+  bool is_open_with_mmap_;
+  bool is_open_with_directio_;
 };
 
 template <class K>
@@ -336,6 +399,14 @@ class SSDHashKV : public KVInterface<K, V> {
     is_async_compaction_ = true;
     TF_CHECK_OK(ReadBoolFromEnvVar("TF_SSDHASH_ASYNC_COMPACTION", true,
           &is_async_compaction_));
+    bool is_open_with_mmap;
+    TF_CHECK_OK(ReadBoolFromEnvVar("TF_SSDHASH_OPEN_FILE_WITH_MMAP", false,
+        &is_open_with_mmap));
+    LOG(INFO)<<"is_open_with_mmap: "<<(bool)is_open_with_mmap;
+    bool is_open_with_directio;
+    TF_CHECK_OK(ReadBoolFromEnvVar("TF_SSDHASH_OPEN_FILE_WITH_DIRECTIO", false,
+        &is_open_with_directio));
+    LOG(INFO)<<"is_open_with_directio: "<<(bool)is_open_with_directio;
     if (!is_async_compaction_) {
       LOG(INFO) <<
         "Use Sync Compactor in SSDHashKV of Multi-tier Embedding Storage!";
@@ -813,10 +884,14 @@ class SSDHashKV : public KVInterface<K, V> {
 
   void MoveToNewFile() {
     ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
+    bool is_open_with_mmap;
+    TF_CHECK_OK(ReadBoolFromEnvVar("TF_SSDHASH_OPEN_FILE_WITH_MMAP", false,
+        &is_open_with_mmap));
     for (auto it : evict_file_map_) {
       EmbFile* file = emb_files_[it.first];
       total_app_count_ -= file->app_invalid_count_;
-      file->Map();
+      if (!is_open_with_mmap)
+        file->Map();
       for (auto it_vec : it.second) {
         EmbPosition* posi = it_vec.second;
         file->ReadWithoutMap((char*)(val->GetPtr()), val_len_,
@@ -824,7 +899,8 @@ class SSDHashKV : public KVInterface<K, V> {
         CheckBuffer();
         SaveKV(it_vec.first, val, true);
       }
-      file->Unmap();
+      if (!is_open_with_mmap)
+        file->Unmap();
     }
     delete val;
   }
@@ -836,10 +912,14 @@ class SSDHashKV : public KVInterface<K, V> {
     unsigned int max_key_count = 1 + int(BUFFER_SIZE / val_len_);
     K* id_buffer = new K[max_key_count];
     EmbPosition** pos_buffer = new EmbPosition*[max_key_count];
+    bool is_open_with_mmap;
+    TF_CHECK_OK(ReadBoolFromEnvVar("TF_SSDHASH_OPEN_FILE_WITH_MMAP", false,
+        &is_open_with_mmap));
     for (auto it : evict_file_map_) {
       EmbFile* file = emb_files_[it.first];
       __sync_fetch_and_sub(&total_app_count_, file->app_invalid_count_);
-      file->Map();
+      if (!is_open_with_mmap)
+        file->Map();
       for (auto it_vec : it.second) {
         EmbPosition* posi = it_vec.second;
         id_buffer[n_ids] = it_vec.first;
@@ -855,7 +935,8 @@ class SSDHashKV : public KVInterface<K, V> {
           }
         }
       }
-      file->Unmap();
+      if (!is_open_with_mmap)
+        file->Unmap();
       invalid_files.emplace_back(it.first);
     }
     Status st = FlushAndUpdate(compact_buffer, id_buffer,
