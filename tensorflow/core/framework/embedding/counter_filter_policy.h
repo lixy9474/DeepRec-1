@@ -96,7 +96,8 @@ class CounterFilterPolicy : public FilterPolicy<K, V, EV> {
       } else {
         value_ptr->SetFreq(freq_buff[i]);
       }
-      if (config_.steps_to_live != 0 || config_.record_version) {
+      if (config_.steps_to_live != 0 ||
+          config_.record_config().is_record_version()) {
         value_ptr->SetStep(version_buff[i]);
       }
       if (value_ptr->GetFreq() >= config_.filter_freq) {
@@ -109,7 +110,7 @@ class CounterFilterPolicy : public FilterPolicy<K, V, EV> {
         }
       }
     }
-    if (ev_->IsMultiLevel() && !ev_->IsUseHbm() && config_.is_primary()) {
+    if (ev_->IsMultiLevel() && !ev_->IsUseHbm() && config_.IsPrimary()) {
       ev_->UpdateCache(key_buff, key_num, version_buff, freq_buff);
     }
     return Status::OK();
@@ -144,7 +145,8 @@ class CounterFilterPolicy : public FilterPolicy<K, V, EV> {
       } else {
         value_ptr->SetFreq(freq_buff[i]);
       }
-      if (config_.steps_to_live != 0 || config_.record_version) {
+      if (config_.steps_to_live != 0 ||
+          config_.record_config().is_record_version()) {
         value_ptr->SetStep(version_buff[i]);
       }
       if (value_ptr->GetFreq() >= config_.filter_freq) {

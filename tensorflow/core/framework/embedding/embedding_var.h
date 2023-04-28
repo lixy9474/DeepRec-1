@@ -60,11 +60,11 @@ class EmbeddingVar : public ResourceBase {
       alloc_(alloc),
       default_value_alloc_(alloc),
       emb_config_(emb_cfg) {
-    if (IsMultiLevel() || emb_config_.record_freq) {
+    if (IsMultiLevel() || emb_config_.record_config().is_record_freq()) {
       add_freq_fn_ = [](ValuePtr<V>* value_ptr, int freq, int64 filter_freq) {
         value_ptr->AddFreq(freq);
       };
-    } else if (emb_config_.is_counter_filter()) {
+    } else if (emb_config_.filter_config().is_counter_filter()) {
       add_freq_fn_ = [](ValuePtr<V>* value_ptr, int freq, int64 filter_freq) {
         if (value_ptr->GetFreq() < filter_freq)
           value_ptr->AddFreq(freq);
@@ -72,7 +72,8 @@ class EmbeddingVar : public ResourceBase {
     } else {
       add_freq_fn_ = [](ValuePtr<V>* value_ptr, int freq, int64 filter_freq) {};
     }
-    if (emb_config_.steps_to_live != 0 || emb_config_.record_version) {
+    if (emb_config_.shrink_config().is_based_on_global_step() ||
+        emb_config_.record_config().is_record_version()) {
       update_version_fn_ = [](ValuePtr<V>* value_ptr, int64 gs) {
         value_ptr->SetStep(gs);
       };
@@ -90,14 +91,14 @@ class EmbeddingVar : public ResourceBase {
     storage_type_ = storage_manager_->GetStorageType();
     filter_ = FilterFactory::CreateFilter<K, V, EmbeddingVar<K, V>>(
         emb_config_, this, storage_manager_);
-    emb_config_.default_value_dim = default_value_dim;
+    emb_config_.default_value_dim() = default_value_dim;
     value_len_ =
-        default_tensor.NumElements() / emb_config_.default_value_dim;
+        default_tensor.NumElements() / emb_config_.default_value_dim();
 
     if (LayoutType::NORMAL_CONTIGUOUS == storage_manager_->GetLayoutType() ||
         LayoutType::NORMAL_CONTIGUOUS_GPU == storage_manager_->GetLayoutType() ||
         LayoutType::COMPACT == storage_manager_->GetLayoutType()) {
-      storage_manager_->SetAllocLen(value_len_, emb_config_.slot_num + 1);
+      storage_manager_->SetAllocLen(value_len_, emb_config_.layout_config().slot_num() + 1);
     }
 
     if (storage_manager_->IsUseHbm()) {
@@ -112,7 +113,7 @@ class EmbeddingVar : public ResourceBase {
       storage_manager_->
           CreateEmbeddingMemoryPool(
               alloc_,
-              emb_config_.total_num(
+              emb_config_.layout_config().total_alloc_num(
                   storage_manager_->GetAllocLen()),
               1024 * 1024 * 64);
 #endif  // GOOGLE_CUDA
@@ -138,7 +139,7 @@ class EmbeddingVar : public ResourceBase {
           value_len_, AllocationAttributes());
       for (int i = 0; i < value_len_; ++i) {
         default_value_no_permission_[i] = static_cast<V>(
-            emb_config_.default_value_no_permission);
+            emb_config_.filter_conifg().default_value_no_permission());
       }
     }
 
@@ -170,19 +171,22 @@ class EmbeddingVar : public ResourceBase {
 
   Status LookupOrCreateKey(K key, ValuePtr<V>** value_ptr) {
     Status s = storage_manager_->GetOrCreate(key, value_ptr,
-        emb_config_.total_num(storage_manager_->GetAllocLen()));
+        emb_config_.layout_config().total_alloc_num(
+            storage_manager_->GetAllocLen()));
     TF_CHECK_OK(s);
     return s;
   }
 
   void CreateKey(K key, ValuePtr<V>** value_ptr) {
     storage_manager_->Insert(key, value_ptr,
-        emb_config_.total_num(storage_manager_->GetAllocLen()));
+        emb_config_.layout_config().total_alloc_num(
+            storage_manager_->GetAllocLen()));
   }
 
   void CreateKeyOnDram(K key, ValuePtr<V>** value_ptr) {
     storage_manager_->InsertToDram(key, value_ptr,
-        emb_config_.total_num(storage_manager_->GetAllocLen()));
+        emb_config_.layout_config().total_alloc_num(
+            storage_manager_->GetAllocLen()));
   }
 
   void UpdateVersion(ValuePtr<V>* value_ptr, int64 gs) {
@@ -192,10 +196,11 @@ class EmbeddingVar : public ResourceBase {
   Status LookupOrCreateKey(K key, ValuePtr<V>** value_ptr,
       int64 update_version, embedding::CopyBackFlag &need_copyback) {
     Status s = storage_manager_->GetOrCreate(key, value_ptr,
-        emb_config_.total_num(storage_manager_->GetAllocLen()), need_copyback);
+        emb_config_.layout_config().total_alloc_num(
+            storage_manager_->GetAllocLen()), need_copyback);
     TF_CHECK_OK(s);
-    if (emb_config_.is_primary() &&
-        emb_config_.steps_to_live != 0 &&
+    if (emb_config_.index_config().is_primary() &&
+        emb_config_.shrink_config().is_based_on_global_step() &&
         update_version != -1) {
       (*value_ptr)->SetStep(update_version);
     }
@@ -234,7 +239,7 @@ class EmbeddingVar : public ResourceBase {
     ValuePtr<V>* value_ptr = nullptr;
     filter_->LookupOrCreate(key, val, default_value_ptr, &value_ptr, count,
                             default_value_no_permission_);
-    add_freq_fn_(value_ptr, count, emb_config_.filter_freq);
+    add_freq_fn_(value_ptr, count, emb_config_.filter_config().filter_freq());
   }
 
   void LookupWithFreqBatch(const K* keys,
@@ -318,27 +323,31 @@ class EmbeddingVar : public ResourceBase {
 
   V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, const V* default_v) {
     return value_ptr->GetOrAllocate(alloc_, value_len_, default_v,
-        emb_config_.emb_index, storage_manager_->GetOffset(
-          emb_config_.emb_index));
+        emb_config_.index_config().emb_index(),
+        storage_manager_->GetOffset(
+            emb_config_.index_config().emb_index()));
   }
 
   V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, const V* default_v,
                        Allocator* alloc) {
     return value_ptr->GetOrAllocate(alloc, value_len_, default_v,
-        emb_config_.emb_index, storage_manager_->GetOffset(
-            emb_config_.emb_index));
+        emb_config_.index_config().emb_index(),
+        storage_manager_->GetOffset(
+            emb_config_.index_config().emb_index()));
   }
 
   V* LookupOrCreateEmb(ValuePtr<V>* value_ptr, bool &need_initialize) {
     return value_ptr->GetOrAllocate(alloc_, value_len_, nullptr,
-        emb_config_.emb_index,
-        storage_manager_->GetOffset(emb_config_.emb_index),
+        emb_config_.index_config().emb_index(),
+        storage_manager_->GetOffset(emb_config_.index_config().emb_index()),
         need_initialize);
   }
 
   V* LookupPrimaryEmb(ValuePtr<V>* value_ptr) {
-    V* primary_val = value_ptr->GetValue(emb_config_.primary_emb_index,
-        storage_manager_->GetOffset(emb_config_.primary_emb_index));
+    V* primary_val = value_ptr->GetValue(
+        emb_config_.index_config().primary_emb_index(),
+        storage_manager_->GetOffset(
+            emb_config_.index_config().primary_emb_index()));
     return primary_val;
   }
 
@@ -361,15 +370,15 @@ class EmbeddingVar : public ResourceBase {
   }
 
   int64 MinFreq() {
-    return emb_config_.filter_freq;
+    return emb_config_.filter_config().filter_freq();
   }
 
   int64 StepsToLive() const {
-    return emb_config_.steps_to_live;
+    return emb_config_.shrink_config().steps_to_live();
   }
 
   float GetL2WeightThreshold() {
-    return emb_config_.l2_weight_threshold;
+    return emb_config_.shirnk_config().l2_weight_threshold();
   }
 
   bool IsMultiLevel() {
@@ -408,9 +417,10 @@ class EmbeddingVar : public ResourceBase {
 #if GOOGLE_CUDA
       V* default_value_host = nullptr;
       if (is_filter) {
-        default_value_host = new V[emb_config_.default_value_dim * value_len_];
+        default_value_host =
+            new V[emb_config_.default_value_dim() * value_len_];
         cudaMemcpy(default_value_host, default_value_,
-                   sizeof(V) * emb_config_.default_value_dim * value_len_,
+                   sizeof(V) * emb_config_.default_value_dim() * value_len_,
                    cudaMemcpyDeviceToHost);
       }
       s = filter_->ImportToDram(restore_buff, key_num, bucket_num,
@@ -446,7 +456,7 @@ class EmbeddingVar : public ResourceBase {
 
   void ImportToHbm(K* ids, int64 size) {
     storage_manager_->ImportToHbm(ids, size,
-        value_len_, emb_config_.emb_index);
+        value_len_, emb_config_.index_config().emb_index());
   }
 
   void RestoreSsdHashmap(
@@ -480,29 +490,30 @@ class EmbeddingVar : public ResourceBase {
       std::stringstream ss;
       ss <<old_file_prefix << "/" << file_id << ".emb";
       int fd = open(ss.str().data(), O_RDONLY);
+      int slot_num = emb_config_.layout_config().slot_num();
       char* file_addr =
           (char*)mmap(nullptr,
                       sizeof(FixedLengthHeader)
                           + alloc_len * sizeof(V)
-                          * (emb_config_.slot_num + 1)
+                          * (slot_num + 1)
                           + key_offset,
                       PROT_READ,
                       MAP_PRIVATE, fd, 0);
 
       NormalContiguousValuePtr<V> tmp_value_ptr(alloc_,
-          alloc_len * (emb_config_.slot_num + 1));
+          alloc_len * (slot_num + 1));
       void* ptr = tmp_value_ptr.GetPtr();
       memcpy(ptr, file_addr + key_offset,
              sizeof(FixedLengthHeader)
-                 + alloc_len * sizeof(V) * (emb_config_.slot_num + 1));
+                 + alloc_len * sizeof(V) * (slot_num + 1));
       munmap(file_addr,
              sizeof(FixedLengthHeader)
                  + alloc_len * sizeof(V)
-                 * (emb_config_.slot_num + 1)
+                 * (slot_num + 1)
                  + key_offset);
       close(fd);
       //Copy Data to ValuePtr, data of slots are set by primary here.
-      for (int j = 0; j < emb_config_.slot_num + 1; j++) {
+      for (int j = 0; j < slot_num + 1; j++) {
         V* value = tmp_value_ptr.GetValue(j, alloc_len * j);
         if (value != nullptr) {
           value_ptr->GetOrAllocate(alloc_, value_len_, value,
@@ -553,8 +564,9 @@ class EmbeddingVar : public ResourceBase {
   }
 
   Status Shrink(int64 gs) {
-    if (emb_config_.steps_to_live > 0) {
-      return storage_manager_->Shrink(gs, emb_config_.steps_to_live);
+    if (emb_config_.shrink_config().is_based_on_global_step()) {
+      return storage_manager_->Shrink(
+          gs, emb_config_.shrink_config().steps_to_live());
     } else {
       return Status::OK();
     }
@@ -565,19 +577,19 @@ class EmbeddingVar : public ResourceBase {
   }
 
   int64 GetDefaultValueDim() {
-    return emb_config_.default_value_dim;
+    return emb_config_.default_value_dim();
   }
 
   V* GetDefaultValue(int64 key) {
-    return default_value_ + (key % emb_config_.default_value_dim) * value_len_;
+    return default_value_ + (key % emb_config_.default_value_dim()) * value_len_;
   }
 
   embedding::BatchCache<K>* Cache() {
     return storage_manager_->Cache();
   }
 
-  int64 GetEmbeddingIndex() {
-    return emb_config_.emb_index;
+  int GetEmbeddingIndex() {
+    return emb_config_.index_config().emb_index();
   }
 
   Allocator* GetAllocator() {
@@ -585,7 +597,8 @@ class EmbeddingVar : public ResourceBase {
   }
 
   int64 GetAllocLen() {
-    return emb_config_.total_num(storage_manager_->GetAllocLen());
+    return emb_config_.layout_config().total_alloc_num
+        storage_manager_->GetAllocLen());
   }
 
   V** GetBuffer(int64 size) {
@@ -635,11 +648,7 @@ class EmbeddingVar : public ResourceBase {
   }
 
   int32 SlotNum() {
-    return (emb_config_.block_num * (1 + emb_config_.slot_num));
-  }
-
-  int32 EmbIdx() {
-    return emb_config_.emb_index;
+    return emb_config_.layout_config().total_slot_num();
   }
 
   GPUHashTable<K, V>* HashTable() {
@@ -654,14 +663,15 @@ class EmbeddingVar : public ResourceBase {
   ~EmbeddingVar() override {
     // When dynamic dimension embedding is used,
     // there will be more than one primary slot
-    if (emb_config_.is_primary() && emb_config_.primary_emb_index == 0) {
+    if (emb_config_.index_conifg().is_primary() && 
+        emb_config_.index_config().primary_emb_index() == 0) {
       delete storage_manager_;
     }
     if (embedding::StorageType::HBM_DRAM == storage_type_) {
       alloc_->DeallocateRaw(dev_addr_buffer_);
     }
     TypedAllocator::Deallocate(default_value_alloc_, default_value_,
-        value_len_ * emb_config_.default_value_dim);
+        value_len_ * emb_config_.default_value_dim());
     if (default_value_no_permission_) {
       TypedAllocator::Deallocate(alloc_, default_value_no_permission_,
           value_len_);

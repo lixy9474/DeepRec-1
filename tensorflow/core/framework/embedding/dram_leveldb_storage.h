@@ -35,26 +35,28 @@ class DramLevelDBStore : public MultiTierStorage<K, V> {
         MultiTierStorage<K, V>(sc, name) {
     dram_kv_ = new LocklessHashMap<K, V>();
     leveldb_ = new LevelDBKV<K, V>(sc.path);
-    if (sc.embedding_config.steps_to_live != 0) {
+    if (sc.embedding_config.shrink_config().is_based_on_global_step()) {
       dram_policy_ = new GlobalStepShrinkPolicy<K, V>(dram_kv_, alloc_,
-          sc.embedding_config.slot_num + 1);
+          sc.embedding_config.layout_config().slot_num() + 1);
       leveldb_policy_ = new GlobalStepShrinkPolicy<K, V>(leveldb_, alloc_,
-          sc.embedding_config.slot_num + 1);
-    } else if (sc.embedding_config.l2_weight_threshold != -1.0) {
+          sc.embedding_config.layout_config().slot_num() + 1);
+    } else if (sc.embedding_config.shrink_config().is_based_on_l2_weight()) {
+      int64 primary_emb_index =
+         sc.embedding_config.index_config().primary_emb_index();
       dram_policy_ =
           new L2WeightShrinkPolicy<K, V>(
-              sc.embedding_config.l2_weight_threshold,
-              sc.embedding_config.primary_emb_index,
-              Storage<K, V>::GetOffset(sc.embedding_config.primary_emb_index),
+              sc.embedding_config.shrink_config().l2_weight_threshold(),
+              primary_emb_index,
+              Storage<K, V>::GetOffset(primary_emb_index),
               dram_kv_, alloc_,
-              sc.embedding_config.slot_num + 1);
+              sc.embedding_config.layout_config().slot_num() + 1);
       leveldb_policy_ =
           new L2WeightShrinkPolicy<K, V>(
-              sc.embedding_config.l2_weight_threshold,
-              sc.embedding_config.primary_emb_index,
-              Storage<K, V>::GetOffset(sc.embedding_config.primary_emb_index),
+              sc.embedding_config.shrink_config().l2_weight_threshold(),
+              primary_emb_index,
+              Storage<K, V>::GetOffset(primary_emb_index),
               leveldb_, alloc_,
-              sc.embedding_config.slot_num + 1);
+              sc.embedding_config.layout_config().slot_num() + 1);
     } else {
       dram_policy_ = nullptr;
       leveldb_policy_ = nullptr;

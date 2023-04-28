@@ -36,26 +36,28 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
         layout_creator_(lc), MultiTierStorage<K, V>(sc, name) {
     dram_kv_ = new LocklessHashMap<K, V>();
     pmem_kv_ = new LocklessHashMap<K, V>();
-    if (sc.embedding_config.steps_to_live != 0) {
+    if (sc.embedding_config.shrink_config().is_based_on_global_step()) {
       dram_policy_ = new GlobalStepShrinkPolicy<K, V>(dram_kv_, dram_alloc_,
-          sc.embedding_config.slot_num + 1);
+          sc.embedding_config.layout_config().slot_num() + 1);
       pmem_policy_ = new GlobalStepShrinkPolicy<K, V>(pmem_kv_, pmem_alloc_,
-          sc.embedding_config.slot_num + 1);
-    } else if (sc.embedding_config.l2_weight_threshold != -1.0) {
+          sc.embedding_config.layout_config().slot_num() + 1);
+    } else if (sc.embedding_config.shrink_config().is_based_on_l2_weight()) {
+      int64 primary_emb_index =
+         sc.embedding_config.index_config().primary_emb_index();
       dram_policy_ =
           new L2WeightShrinkPolicy<K, V>(
-              sc.embedding_config.l2_weight_threshold,
-              sc.embedding_config.primary_emb_index,
-              Storage<K, V>::GetOffset(sc.embedding_config.primary_emb_index),
+              sc.embedding_config.shrink_config().l2_weight_threshold(),
+              primary_emb_index,
+              Storage<K, V>::GetOffset(primary_emb_index),
               dram_kv_, dram_alloc_,
-              sc.embedding_config.slot_num + 1);
+              sc.embedding_config.layout_config().slot_num() + 1);
       pmem_policy_ =
           new L2WeightShrinkPolicy<K, V>(
-              sc.embedding_config.l2_weight_threshold,
-              sc.embedding_config.primary_emb_index,
-              Storage<K, V>::GetOffset(sc.embedding_config.primary_emb_index),
+              sc.embedding_config.shrink_config().l2_weight_threshold(),
+              primary_emb_index,
+              Storage<K, V>::GetOffset(primary_emb_index),
               pmem_kv_, pmem_alloc_,
-              sc.embedding_config.slot_num + 1);
+              sc.embedding_config.layout_config().slot_num() + 1);
     } else {
       dram_policy_ = nullptr;
       pmem_policy_ = nullptr;

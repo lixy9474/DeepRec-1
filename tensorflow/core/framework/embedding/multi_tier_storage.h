@@ -126,11 +126,14 @@ class MultiTierStorage : public Storage<K, V> {
         output_version_list->emplace_back(dump_version);
       }
 
-      V* val = input_value_ptr_list[i]->GetValue(emb_config.emb_index,
-          Storage<K, V>::GetOffset(emb_config.emb_index));
+      int64 emb_index = emb_config.index_config().emb_index();
+      int64 primary_emb_index = emb_config.index_config().primary_emb_index();
+
+      V* val = input_value_ptr_list[i]->GetValue(emb_index,
+          Storage<K, V>::GetOffset(emb_index));
       V* primary_val = input_value_ptr_list[i]->GetValue(
-          emb_config.primary_emb_index,
-          Storage<K, V>::GetOffset(emb_config.primary_emb_index));
+          primary_emb_index,
+          Storage<K, V>::GetOffset(primary_emb_index));
       /* Classify features into 3 categories:
         1. filtered
         2. not involved in backward
