@@ -16,7 +16,7 @@ limitations under the License.
 #if GOOGLE_CUDA
 #define EIGEN_USE_GPU
 
-#include "tensorflow/core/framework/embedding/gpu_hash_table.h"
+//#include "tensorflow/core/framework/embedding/gpu_hash_table.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/kernels/training_ali_ops.h"
 #include "tensorflow/core/kernels/training_ali_ops_gpu.h"
@@ -59,7 +59,7 @@ __global__ void kv_sparse_apply_adagrad_kernel(int32* item_idxs,
                                                Value* acc_default_v,
                                                int32 var_default_v_num,
                                                int32 acc_default_v_num) {
-  auto item_idx = blockIdx.x;
+  /*auto item_idx = blockIdx.x;
   auto item_pos = item_idxs[item_idx];
   auto bank_idx = item_pos / bank_size;
   auto offset_in_bank = item_pos % bank_size;
@@ -87,7 +87,7 @@ __global__ void kv_sparse_apply_adagrad_kernel(int32* item_idxs,
     Value* acc = &d_banks[acc_slot_offset][tmp_offset];
     (*acc) += g * g;
     d_banks[var_slot_offset][tmp_offset] -= lr * g * rsqrtf(*acc);
-  }
+  }*/
 }
 
 template <typename TKey, typename T>
@@ -101,7 +101,7 @@ struct KvSparseApplyAdagrad<GPUDevice, TKey, T> {
                   T lr,
                   int64 gs,
                   const GPUDevice& device) {
-    int32* item_idxs = TypedAllocator::Allocate<int32>(alloc, num_items, AllocationAttributes());
+    /*int32* item_idxs = TypedAllocator::Allocate<int32>(alloc, num_items, AllocationAttributes());
     var->LookupOrCreateKey(key_base, item_idxs, num_items, device, gs);
     auto const block_size = 256;
     auto const grid_size = num_items;
@@ -114,7 +114,7 @@ struct KvSparseApplyAdagrad<GPUDevice, TKey, T> {
                                 var->SlotNum(), hashtable->initial_bank_size,
                                 lr, grad, var->GetDefaultValuePtr(), accum->GetDefaultValuePtr(),
                                 var->GetDefaultValueDim(), accum->GetDefaultValueDim()));
-    TypedAllocator::Deallocate(alloc, item_idxs, num_items);
+    TypedAllocator::Deallocate(alloc, item_idxs, num_items);*/
   }
 };
 
@@ -124,12 +124,12 @@ struct KvSparseApplyAdagradHbm<GPUDevice, TKey, T> {
                   T** dev_a, T**dev_v, const T* grad_base,
                   T lr_scalar, int64 task_size,
                   const GPUDevice& device) {
-    TF_CHECK_OK(GpuLaunchKernel(
+    /*TF_CHECK_OK(GpuLaunchKernel(
         SparseApplyAdagradGPU<T>,
         (task_size + block_size - 1) / block_size * embedding_dim,
         block_size, 0, device.stream(),
         dev_a, dev_v, grad_base, lr_scalar,
-        embedding_dim, task_size));
+        embedding_dim, task_size));*/
   }
 };
 
@@ -140,13 +140,13 @@ struct KvSparseApplyAdamHbm<GPUDevice, TKey, T> {
                   const T* grad_base, T alpha,
                   T beta1, T beta2, T epsilon, int64 task_size,
                   const GPUDevice& device) {
-    TF_CHECK_OK(GpuLaunchKernel(
+    /*TF_CHECK_OK(GpuLaunchKernel(
         SparseApplyAdamGPU<T>,
         (task_size + block_size - 1) / block_size * embedding_dim,
         block_size, 0, device.stream(),
         dev_var, dev_m, dev_v, grad_base,
         alpha, beta1, beta2, epsilon,
-        embedding_dim, task_size));
+        embedding_dim, task_size));*/
   }
 };
 
@@ -158,14 +158,14 @@ struct KvSparseApplyAdamAsyncHbm<GPUDevice, TKey, T> {
                   T beta2, T epsilon, T* beta1_power_ptr,
                   T* beta2_power_ptr, int64 task_size,
                   const GPUDevice& device) {
-    TF_CHECK_OK(GpuLaunchKernel(
+    /*TF_CHECK_OK(GpuLaunchKernel(
         SparseApplyAdamAsyncGPU<T>,
         (task_size + block_size - 1) / block_size * embedding_dim,
         block_size, 0, device.stream(),
         dev_var, dev_m, dev_v, grad_base,
         lr, beta1, beta2, epsilon,
         beta1_power_ptr, beta2_power_ptr,
-        embedding_dim, task_size));
+        embedding_dim, task_size));*/
   }
 };
 
@@ -176,13 +176,13 @@ struct KvSparseApplyAdamAsyncSparseRmspropHbm<GPUDevice, TKey, T> {
                   const T* grad_base, T lr, T beta1,
                   T beta2, T epsilon, int64 task_size,
                   const GPUDevice& device) {
-    TF_CHECK_OK(GpuLaunchKernel(
+    /*TF_CHECK_OK(GpuLaunchKernel(
         SparseApplyAdamAsyncSparseRmspropGPU<T>,
         (task_size + block_size - 1) / block_size * embedding_dim,
         block_size, 0, device.stream(),
         dev_var, dev_m, dev_v, grad_base,
         lr, beta1, beta2, epsilon,
-        embedding_dim, task_size));
+        embedding_dim, task_size));*/
   }
 };
 
@@ -193,14 +193,14 @@ struct KvSparseApplyAdamWHbm<GPUDevice, TKey, T> {
                   const T* grad_base, T lr, T beta1,
                   T beta2, T epsilon, T weight_decay,
                   int64 task_size, const GPUDevice& device) {
-    TF_CHECK_OK(GpuLaunchKernel(
+    /*TF_CHECK_OK(GpuLaunchKernel(
         SparseApplyAdamWGPU<T>,
         (task_size + block_size - 1) / block_size * embedding_dim,
         block_size, 0, device.stream(),
         dev_var, dev_m, dev_v, grad_base,
         lr, beta1, beta2, epsilon,
         weight_decay, embedding_dim,
-        task_size));
+        task_size));*/
   }
 };
 
@@ -257,7 +257,7 @@ __global__ void kv_sparse_apply_ftrl_kernel(int32* item_idxs,
                                             Value lr_power_scalar,
                                             bool has_l2_shrinkage,
                                             Value l2_shrinkage_scalar) {
-  auto item_idx = blockIdx.x;
+  /*auto item_idx = blockIdx.x;
   auto item_pos = item_idxs[item_idx];
   auto bank_idx = item_pos / bank_size;
   auto offset_in_bank = item_pos % bank_size;
@@ -339,7 +339,7 @@ __global__ void kv_sparse_apply_ftrl_kernel(int32* item_idxs,
       *var_p = 0;
     }
     (*acc_p) += g * g;
-  }
+  }*/
 }
 
 template <typename TKey, typename T>
@@ -358,7 +358,7 @@ struct KvSparseApplyFtrl<GPUDevice, TKey, T> {
                   bool has_l2_shrinkage,
                   T l2_shrinkage,
                   const GPUDevice& device) {
-    int32* item_idxs = TypedAllocator::Allocate<int32>(alloc, num_items, AllocationAttributes());
+    /*int32* item_idxs = TypedAllocator::Allocate<int32>(alloc, num_items, AllocationAttributes());
     var->LookupOrCreateKey(key_base, item_idxs, num_items, device);
     auto const block_size = 256;
     auto const grid_size = num_items;
@@ -372,7 +372,7 @@ struct KvSparseApplyFtrl<GPUDevice, TKey, T> {
                                 lr, grad, var->GetDefaultValuePtr(), accum->GetDefaultValuePtr(), linear->GetDefaultValuePtr(),
                                 var->GetDefaultValueDim(), accum->GetDefaultValueDim(), linear->GetDefaultValueDim(),
                                 l1, l2, lr_power, has_l2_shrinkage, l2_shrinkage));
-    TypedAllocator::Deallocate(alloc, item_idxs, num_items);
+    TypedAllocator::Deallocate(alloc, item_idxs, num_items);*/
   }
 };
 
@@ -400,7 +400,7 @@ __global__ void KvSparseApplyAdamAsyncKernel(int32 *item_idxs,
                                               int32 v_default_v_num,
                                               int32 m_default_v_num,
                                               bool apply_sparse_rmsprop) {
-  const T lr = *lr_scalar;
+  /*const T lr = *lr_scalar;
   const T beta1 = *beta1_scalar;
   const T beta2 = *beta2_scalar;
   const T beta1_power = *beta1_power_scalar;
@@ -464,7 +464,7 @@ __global__ void KvSparseApplyAdamAsyncKernel(int32 *item_idxs,
       v_a = v_a*beta2 + grad_a*grad_a*(static_cast<T>(1)-beta2);
       var_a -= (m_a*alpha) / (sqrt(v_a)+epsilon);
     }
-  }
+  }*/
 }
 
 template <typename T, typename Tindex, typename Tstep>
@@ -487,7 +487,7 @@ struct KvSparseApplyAdamAsync<GPUDevice, T, Tindex, Tstep> {
     const int32 N = indices_vec.dimension(0);
     if (N <= 0) return Status::OK();
 
-    if (inner_dim > 0) {
+    /*if (inner_dim > 0) {
       const int64 global_step = global_step_scalar();
       int32 *item_idxs = TypedAllocator::Allocate<int32>(alloc, N, AllocationAttributes());
       var->LookupOrCreateKey(indices_vec.data(), item_idxs, N, d, global_step);
@@ -512,7 +512,7 @@ struct KvSparseApplyAdamAsync<GPUDevice, T, Tindex, Tstep> {
     if (!apply_sparse_rmsprop) {
       beta1_power_scalar.device(d) = beta1_power_scalar * beta1_scalar;
       beta2_power_scalar.device(d) = beta2_power_scalar * beta2_scalar;
-    }
+    }*/
 
     return Status::OK();
 }
@@ -743,4 +743,4 @@ TF_CALL_double(REGISTER_ALL_TYPE)
 #undef REGISTER_ALL_TYPE
 
 }  // end namespace tensorflow
-#endif  // GOOGLE_CUDA
+#endif  // Compile

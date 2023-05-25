@@ -15,7 +15,7 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_GPU_HASH_TABLE_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_GPU_HASH_TABLE_H_
 
-#if GOOGLE_CUDA
+#if Compile
 #include <cuda/std/atomic>
 #include "tensorflow/core/framework/typed_allocator.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -127,5 +127,5 @@ struct KvEmbGetSnapshot {
 } // namespace functor
 } // namespace tensorflow
 
-#endif // GOOGLE_CUDA
+#endif // Compile
 #endif // TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_GPU_HASH_TABLE_H_

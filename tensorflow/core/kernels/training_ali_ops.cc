@@ -257,11 +257,11 @@ class KvSparseApplyAdagradGPUOp : public OpKernel {
 
     int block_size = 128;
     int embedding_dim = var->ValueLen();
-    functor::KvSparseApplyAdagradHbm<GPUDevice, TKey, T>()(
+    /*functor::KvSparseApplyAdagradHbm<GPUDevice, TKey, T>()(
             block_size, embedding_dim,
             dev_a, dev_v, grad_base,
             lr_scalar, task_size, gpu_device);
-    SyncWithEventMgr(stream, event_mgr);
+    SyncWithEventMgr(stream, event_mgr);*/
   }
 
   void Compute(OpKernelContext* ctx) override NO_THREAD_SAFETY_ANALYSIS {
@@ -320,9 +320,9 @@ class KvSparseApplyAdagradGPUOp : public OpKernel {
           const T* grad_base = &grad_flat(0);
           const Device& device = ctx->eigen_device<Device>();
 
-          functor::KvSparseApplyAdagrad<Device, TKey, T>()(
+          /*functor::KvSparseApplyAdagrad<Device, TKey, T>()(
               N, ctx->get_allocator(AllocatorAttributes()), var, accum,
-              key_base, grad_base, lr_scalar, gs, device);
+              key_base, grad_base, lr_scalar, gs, device);*/
         } else {
           ValuePtr<T>** value_ptrs = new ValuePtr<T>*[N];
           TKey* indices_host = nullptr;
@@ -750,10 +750,10 @@ class KvSparseApplyFtrlOpGPU : public OpKernel {
         const T* grad_base = &grad_flat(0);
         const Device& device = ctx->eigen_device<Device>();
 
-        functor::KvSparseApplyFtrl<Device, TKey, T>()(
+        /*functor::KvSparseApplyFtrl<Device, TKey, T>()(
             N, ctx->get_allocator(AllocatorAttributes()), var_, accum_, linear_,
             key_base, grad_base, lr_scalar, l1_scalar, l2_scalar, lr_power_scalar,
-            has_l2_shrinkage, l2_shrinkage_scalar, device);
+            has_l2_shrinkage, l2_shrinkage_scalar, device);*/
       }
     }
 
@@ -1570,12 +1570,12 @@ class KvSparseApplyAdamGPUOp : public OpKernel {
     int block_size = 128;
     int embedding_dim = var->ValueLen();
 
-    functor::KvSparseApplyAdamHbm<GPUDevice, Tindex, T>()(
+    /*functor::KvSparseApplyAdamHbm<GPUDevice, Tindex, T>()(
         block_size, embedding_dim,
         dev_var_ptr, dev_m_ptr, dev_v_ptr, grad_base,
         alpha, beta1, beta2, epsilon,
         task_size, gpu_device);
-    SyncWithEventMgr(stream, event_mgr);
+    SyncWithEventMgr(stream, event_mgr);*/
   }
 
   void Compute(OpKernelContext* ctx) override NO_THREAD_SAFETY_ANALYSIS {
@@ -2555,7 +2555,7 @@ class KvSparseApplyAdamAsyncGPUOp : public OpKernel {
     int embedding_dim = var->ValueLen();
     T* beta1_power_ptr = beta1_power_scalar.data();
     T* beta2_power_ptr = beta2_power_scalar.data();
-    if (apply_sparse_rmsprop_) {
+    /*if (apply_sparse_rmsprop_) {
       functor::KvSparseApplyAdamAsyncSparseRmspropHbm<GPUDevice, Tindex, T>()(
           block_size, embedding_dim,
           dev_var_ptr, dev_m_ptr, dev_v_ptr,
@@ -2571,7 +2571,7 @@ class KvSparseApplyAdamAsyncGPUOp : public OpKernel {
           beta2_power_ptr, task_size,
           gpu_device);
     }
-    SyncWithEventMgr(stream, event_mgr);
+    SyncWithEventMgr(stream, event_mgr);*/
   }
 
   void Compute(OpKernelContext* ctx) override NO_THREAD_SAFETY_ANALYSIS {
@@ -2661,13 +2661,13 @@ class KvSparseApplyAdamAsyncGPUOp : public OpKernel {
     if (N > 0) {
       if (var->IsSingleHbm()) {
         const Device& device = ctx->eigen_device<Device>();
-        OP_REQUIRES_OK(ctx,
+        /*OP_REQUIRES_OK(ctx,
         functor::KvSparseApplyAdamAsync<Device, T, Tindex, Tstep>()(
           device, var, m, v, beta1_power.scalar<T>(), beta2_power.scalar<T>(),
           indices.vec<Tindex>(), grad.flat_outer_dims<T>(), lr.scalar<T>(),
           beta1.scalar<T>(), beta2.scalar<T>(), epsilon.scalar<T>(),
           global_step.scalar<Tstep>(), apply_sparse_rmsprop_, inner_dim,
-          ctx->get_allocator(AllocatorAttributes())));
+          ctx->get_allocator(AllocatorAttributes())));*/
       } else {
         auto indices_vec = indices.vec<Tindex>();
         auto grad_flat = grad.flat_outer_dims<T>();
@@ -3188,12 +3188,12 @@ class KvSparseApplyAdamWGPUOp : public OpKernel {
 
     int block_size = 128;
     int embedding_dim = var->ValueLen();
-    functor::KvSparseApplyAdamWHbm<GPUDevice, Tindex, T>()(
+    /*functor::KvSparseApplyAdamWHbm<GPUDevice, Tindex, T>()(
             block_size, embedding_dim,
             dev_var_ptr, dev_m_ptr, dev_v_ptr, grad_base,
             alpha, beta1, beta2, epsilon, weight_decay,
             task_size, gpu_device);
-    SyncWithEventMgr(stream, event_mgr);
+    SyncWithEventMgr(stream, event_mgr);*/
   }
 
   void Compute(OpKernelContext* ctx) override NO_THREAD_SAFETY_ANALYSIS {

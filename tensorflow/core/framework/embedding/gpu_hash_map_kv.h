@@ -15,7 +15,7 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_GPU_HASH_MAP_KV_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_GPU_HASH_MAP_KV_H_
 
-#if GOOGLE_CUDA
+#if Compile
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/framework/embedding/gpu_hash_table.h"
 
@@ -289,5 +289,5 @@ class GPUHashMapKV : public KVInterface<K, V> {
 } // namespace embedding
 } // namespace tensorflow
 
-#endif // GOOGLE_CUDA
+#endif // Compile
 #endif // TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_GPU_HASH_MAP_KV_H_

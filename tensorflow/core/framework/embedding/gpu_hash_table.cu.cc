@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#if GOOGLE_CUDA
+#if Complie
 
 #define EIGEN_USE_GPU
 
@@ -449,4 +449,4 @@ TF_CALL_REAL_NUMBER_TYPES(REGISTER_ALL_TYPE)
 
 }  // namespace tensorflow
 
-#endif  // GOOGLE_CUDA
+#endif  // Compile

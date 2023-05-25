@@ -429,7 +429,7 @@ class HbmStorage : public SingleTierStorage<K, V> {
  public:
   HbmStorage(const StorageConfig& sc, Allocator* alloc,
       LayoutCreator<V>* lc) : SingleTierStorage<K, V>(
-          sc, alloc, new GPUHashMapKV<K, V>(sc.embedding_config, alloc), lc) {
+          sc, alloc, new LocklessHashMap<K, V>(), lc) {
   }
   ~HbmStorage() override {}
 
@@ -462,24 +462,24 @@ class HbmStorage : public SingleTierStorage<K, V> {
       const EmbeddingConfig& emb_config,
       FilterPolicy<K, V, EmbeddingVar<K, V>>* filter,
       embedding::Iterator** it) override {
-    GPUHashMapKV<K, V>* gpu_kv =
+    /*GPUHashMapKV<K, V>* gpu_kv =
         dynamic_cast<GPUHashMapKV<K, V>*>(SingleTierStorage<K, V>::kv_);
     gpu_kv->GetSnapshot(key_list, value_list, emb_config);
-    return key_list->size();
+    return key_list->size();*/
   }
 
   void ImportToHbm(
       const std::vector<K>& keys, const std::vector<V>& values,
       const Eigen::GpuDevice* device,
       const EmbeddingConfig& emb_config) override {
-    GPUHashMapKV<K, V>* gpu_kv =
+    /*GPUHashMapKV<K, V>* gpu_kv =
         dynamic_cast<GPUHashMapKV<K, V>*>(SingleTierStorage<K, V>::kv_);
-    gpu_kv->Import(keys, values, device, emb_config);
+    gpu_kv->Import(keys, values, device, emb_config);*/
   }
 
-  GPUHashTable<K, V>* HashTable() override {
+  /*GPUHashTable<K, V>* HashTable() override {
     return SingleTierStorage<K, V>::kv_->HashTable();
-  }
+  }*/
 
  protected:
   void SetTotalDims(int64 total_dims) override {}

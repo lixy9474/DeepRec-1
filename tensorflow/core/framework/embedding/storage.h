@@ -40,8 +40,8 @@ struct SsdRecordDescriptor;
 template<typename K, typename V, typename EV>
 class FilterPolicy;
 
-template <class K, class V>
-class GPUHashTable;
+//template <class K, class V>
+//class GPUHashTable;
 
 namespace embedding {
 
@@ -117,9 +117,9 @@ class Storage {
   virtual void ImportToHbm(const std::vector<K>& keys,
       const std::vector<V>& values, const Eigen::GpuDevice* device,
       const EmbeddingConfig& emb_config) {};
-  virtual GPUHashTable<K, V>* HashTable() {
+  /*virtual GPUHashTable<K, V>* HashTable() {
     return nullptr;
-  }
+  }*/
 
   virtual void InitCache(embedding::CacheStrategy cache_strategy) = 0;
   virtual int64 CacheSize() const = 0;

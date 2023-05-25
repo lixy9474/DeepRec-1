@@ -121,6 +121,6 @@ struct KvSparseApplyAdamWHbm {
 };
 }  // end namespace functor
 }  // end namespace tensorflow
-#endif  // GOOGLE_CUDA
+#endif  // Compile
 
 #endif  // TENSORFLOW_CORE_KERNELS_TRAINING_ALI_OPS_GPU_H_

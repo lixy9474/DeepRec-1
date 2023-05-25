@@ -23,8 +23,8 @@ namespace tensorflow {
 template <class V>
 class ValuePtr;
 
-template <class K, class V>
-class GPUHashTable;
+//template <class K, class V>
+//class GPUHashTable;
 
 namespace embedding {
 class Iterator {
@@ -107,9 +107,9 @@ class KVInterface {
     return Status::OK();
   }
 
-  virtual GPUHashTable<K, V>* HashTable() {
+  /*virtual GPUHashTable<K, V>* HashTable() {
     return nullptr;
-  }
+  }*/
 
   virtual void SetValueLen(int64 value_len) {}
 

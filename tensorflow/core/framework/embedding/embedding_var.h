@@ -47,8 +47,8 @@ namespace {
 const char* kInferenceMode = "INFERENCE_MODE";
 }
 
-template <class K, class V>
-class GPUHashTable;
+//template <class K, class V>
+//class GPUHashTable;
 
 template <class K, class V>
 class EmbeddingVar : public ResourceBase {
@@ -640,9 +640,9 @@ class EmbeddingVar : public ResourceBase {
     return emb_config_.emb_index;
   }
 
-  GPUHashTable<K, V>* HashTable() {
+  /*GPUHashTable<K, V>* HashTable() {
     return storage_->HashTable();
-  }
+  }*/
 
  protected:
   FilterPolicy<K, V, EmbeddingVar<K, V>>* GetFilter() const {
