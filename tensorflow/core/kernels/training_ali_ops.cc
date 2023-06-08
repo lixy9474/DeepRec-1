@@ -160,7 +160,7 @@ class KvSparseApplyAdagradOp : public OpKernel {
         auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
         Shard(worker_threads.num_threads, worker_threads.workers, N, cost, do_work);
 
-        if (has_counts) {
+        if (has_counts && !indices_as_pointer) {
           const Tensor& indices_counts = ctx->input(6);
           var->UpdateCache(indices, indices_counts);
         }
@@ -347,7 +347,7 @@ class KvSparseApplyAdagradGPUOp : public OpKernel {
               stream, event_mgr,
               ctx->eigen_device<GPUDevice>());
 
-          if (has_counts) {
+          if (has_counts && !indices_as_pointer) {
             const Tensor& counts_tensor = ctx->input(counts_index);
               var->UpdateCache(*indices_host_ptr, counts_tensor);
           }
@@ -607,7 +607,7 @@ class KvSparseApplyFtrlOp : public OpKernel {
         auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
         Shard(worker_threads.num_threads, worker_threads.workers, N, cost, do_work);
 
-        if (has_counts) {
+        if (has_counts && !indices_as_pointer) {
           const int counts_input_index = has_l2_shrinkage ? 10 : 9;
           const Tensor& indices_counts = ctx->input(counts_input_index);
           var_->UpdateCache(indices, indices_counts);
@@ -1335,7 +1335,7 @@ class KvSparseApplyAdagradDecayOp : public OpKernel {
         const int64 cost = 1000;
         auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
         Shard(worker_threads.num_threads, worker_threads.workers, N, cost, do_work);
-        if (has_counts) {
+        if (has_counts && !indices_as_pointer) {
           const Tensor& indices_counts = ctx->input(10);
           var->UpdateCache(indices, indices_counts);
         }
@@ -1538,7 +1538,7 @@ class KvSparseApplyAdamOp : public OpKernel {
       const int64 cost = 1000;
       auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
       Shard(worker_threads.num_threads, worker_threads.workers, N, cost, DoWork);
-      if (has_counts) {
+      if (has_counts && !indices_as_pointer) {
         const Tensor& indices_counts = ctx->input(12);
         var->UpdateCache(indices, indices_counts);
       }
@@ -1745,7 +1745,7 @@ class KvSparseApplyAdamGPUOp : public OpKernel {
             stream, event_mgr,
             ctx->eigen_gpu_device());
 
-        if (has_counts) {
+        if (has_counts && !indices_as_pointer) {
           const Tensor& counts_tensor = ctx->input(counts_index);
           var->UpdateCache(indices, counts_tensor);
         }
@@ -2495,7 +2495,7 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
         beta1_power_scalar() *= beta1_scalar;
         beta2_power_scalar() *= beta2_scalar;
       }
-      if (has_counts) {
+      if (has_counts && !indices_as_pointer) {
         const Tensor& indices_counts = ctx->input(12);
         var->UpdateCache(indices, indices_counts);
       }
@@ -2764,7 +2764,7 @@ class KvSparseApplyAdamAsyncGPUOp : public OpKernel {
             stream, event_mgr,
             ctx->eigen_device<GPUDevice>());
 
-        if (has_counts) {
+        if (has_counts && !indices_as_pointer) {
           const Tensor& counts_tensor = ctx->input(counts_index);
           var->UpdateCache(*indices_host_ptr, counts_tensor);
         }
@@ -2795,6 +2795,7 @@ class KvSparseApplyAdamAsyncGPUOp : public OpKernel {
                           KvSparseApplyAdamAsyncGPUOp<D##Device, T, Tindices, Tstep, false, false>); \
   REGISTER_KERNEL_BUILDER(Name("_OPT_KvResourceSparseApplyAdamAsync")           \
                               .Device(DEVICE_##D)                          \
+                              .HostMemory("indices")                 \
                               .HostMemory("lr")                      \
                               .HostMemory("beta1")                   \
                               .HostMemory("beta2")                   \
@@ -2818,6 +2819,7 @@ class KvSparseApplyAdamAsyncGPUOp : public OpKernel {
                           KvSparseApplyAdamAsyncGPUOp<D##Device, T, Tindices, Tstep, false, true>); \
   REGISTER_KERNEL_BUILDER(Name("_OPT_KvResourceSparseApplyAdamAsyncWithCounts")           \
                               .Device(DEVICE_##D)                          \
+                              .HostMemory("indices")                 \
                               .HostMemory("lr")                      \
                               .HostMemory("beta1")                   \
                               .HostMemory("beta2")                   \
@@ -2968,7 +2970,7 @@ class KvResourceSparseApplyGradientDescentOp : public OpKernel {
         const int64 cost = 1000;
         auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
         Shard(worker_threads.num_threads, worker_threads.workers, N, cost, do_work);
-        if (has_counts) {
+        if (has_counts && !indices_as_pointer) {
           const Tensor& indices = ctx->input(5);
           var->UpdateCache(indices, indices_counts);
         } else {
@@ -3173,7 +3175,7 @@ class KvSparseApplyAdamWOp : public OpKernel {
       const int64 cost = 1000;
       auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
       Shard(worker_threads.num_threads, worker_threads.workers, N, cost, DoWork);
-      if (has_counts) {
+      if (has_counts && !indices_as_pointer) {
         const Tensor& indices_counts = ctx->input(13);
         var->UpdateCache(indices, indices_counts);
       }
@@ -3384,7 +3386,7 @@ class KvSparseApplyAdamWGPUOp : public OpKernel {
             stream, event_mgr,
             ctx->eigen_gpu_device());
 
-        if (has_counts) {
+        if (has_counts && !indices_as_pointer) {
           const Tensor& counts_tensor = ctx->input(counts_index);
           var->UpdateCache(indices, counts_tensor);
         }
