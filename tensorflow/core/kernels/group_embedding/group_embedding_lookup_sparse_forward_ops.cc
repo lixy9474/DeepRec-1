@@ -16,6 +16,7 @@ limitations under the License.
 
 #include "tensorflow/core/framework/embedding/cache.h"
 #include "tensorflow/core/framework/embedding/embedding_var.h"
+#include "tensorflow/core/framework/embedding/embedding_var_context.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
@@ -27,9 +28,9 @@ namespace tensorflow {
   using GroupLookupBaseCpuOp<TKey, TValue>::m_num_lookup;                  \
   using GroupLookupBaseCpuOp<TKey, TValue>::m_dimension;                   \
   using GroupLookupBaseCpuOp<TKey, TValue>::m_is_use_default_value_tensor; \
-  using GroupLookupBaseCpuOp<TKey, TValue>::m_is_sequence;                 \
-  using GroupLookupBaseCpuOp<TKey, TValue>::m_get_default_v_fn;            \
-  using GroupLookupBaseCpuOp<TKey, TValue>::m_lookup_fn;
+  using GroupLookupBaseCpuOp<TKey, TValue>::m_is_sequence;
+
+using CPUDevice = Eigen::ThreadPoolDevice;
 
 template <typename TKey, typename TValue>
 class GroupEmbeddingVariableLookupCpuOp
@@ -39,36 +40,9 @@ class GroupEmbeddingVariableLookupCpuOp
  public:
   explicit GroupEmbeddingVariableLookupCpuOp(OpKernelConstruction *c)
       : GroupLookupBaseCpuOp<TKey, TValue>(c) {
-    bool is_inference;
-    TF_CHECK_OK(ReadBoolFromEnvVar(kInferenceMode, false, &is_inference));
-
-    if (!is_inference) {
-      m_lookup_fn = [](EmbeddingVar<TKey, TValue> *ev, TKey key, TValue *val,
-                       TValue *default_v, int count) {
-        ev->LookupOrCreate(key, val, default_v, count);
-        return Status::OK();
-      };
-    } else {
-      m_lookup_fn = [](EmbeddingVar<TKey, TValue> *ev, TKey key, TValue *val,
-                       TValue *default_v, int count) {
-        ev->LookupOrCreate(key, val, default_v);
-        return Status::OK();
-      };
-    }
 
     OP_REQUIRES_OK(c, c->GetAttr("is_use_default_value_tensor",
                                  &m_is_use_default_value_tensor));
-
-    if (m_is_use_default_value_tensor) {
-      m_get_default_v_fn = [](TValue *default_v, TKey id, int64 index,
-                              int64 total_dim,
-                              int64 len) { return default_v + len * index; };
-    } else {
-      m_get_default_v_fn = [](TValue *default_v, TKey id, int64 index,
-                              int64 total_dim, int64 len) {
-        return default_v + len * (id % total_dim);
-      };
-    }
   }
 
   void Compute(OpKernelContext *ctx) override {
@@ -137,14 +111,6 @@ class GroupEmbeddingVariableLookupCpuOp
         batch_nums[k] += batch_nums[k - 1];
       }
 
-      TValue *default_v = nullptr;
-      if (m_is_use_default_value_tensor) {
-        default_v =
-            reinterpret_cast<TValue *>(ctx->input(m_num_lookup * 4 + 1).data());
-      } else {
-        default_v = embedding_var->GetDefaultValuePtr();
-      }
-
       // Stage 2
       Tensor unique_embedding;
       unique_shape.AppendShape({static_cast<int64>(m_dimension)});
@@ -154,30 +120,13 @@ class GroupEmbeddingVariableLookupCpuOp
           ctx, ctx->allocate_temp(DataTypeToEnum<TValue>::v(), unique_shape,
                                   &unique_embedding, attr));
       auto unique_embedding_data = unique_embedding.flat<TValue>().data();
-
-      int slice_bytes = unique_nnz * m_dimension * 1000;
-      auto do_lookup = [this, ctx, embedding_var, unique, default_v,
-                        unique_embedding_data](int64 start, int64 end) {
-        for (int k = start; k < end; ++k) {
-          TValue *default_v_ptr = m_get_default_v_fn(
-              default_v, unique[k], k, embedding_var->GetDefaultValueDim(),
-              embedding_var->ValueLen());
-          OP_REQUIRES_OK(ctx,
-                         m_lookup_fn(embedding_var, unique[k],
-                                     unique_embedding_data + k * m_dimension,
-                                     default_v_ptr, 1 /*count*/));
-        }
-      };
-      Shard(worker_threads->num_threads, worker_threads->workers, unique_nnz,
-            slice_bytes /*cost*/, do_lookup);
-
-      if (embedding_var->IsMultiLevel()) {
-        embedding::BatchCache<TKey> *cache = embedding_var->Cache();
-        embedding_var->storage()->Schedule(
-            [embedding_var, sp_values_tensor] {
-              embedding::BatchCache<TKey> *cache = embedding_var->Cache();
-              cache->update(sp_values_tensor);
-            });
+      EmbeddingVarContext<CPUDevice> ev_ctx(ctx); 
+      if (m_is_use_default_value_tensor) {
+        embedding_var->GetEmbeddings(ev_ctx, unique, unique_embedding_data,
+            unique_nnz, reinterpret_cast<TValue *>(ctx->input(m_num_lookup * 4 + 1).data()));
+      } else {
+        embedding_var->GetEmbeddings(ev_ctx, unique, unique_embedding_data, unique_nnz);
+        embedding_var->UpdateCache(unique_tensor, unique_counter, true/*called_by_gather*/);
       }
 
       std::vector<TValue> default_weights(nnz, 1.0);
@@ -205,7 +154,7 @@ class GroupEmbeddingVariableLookupCpuOp
                                                &gather_embedding_tensor));
       auto gather_embedding = gather_embedding_tensor->flat<TValue>().data();
 
-      slice_bytes = nnz / batch_size * m_dimension * 1000;
+      int slice_bytes = nnz / batch_size * m_dimension * 1000;
       // todo: clean these redundant code
       if (this->m_combiner == "mean") {
         auto embedding_var_mean_combiner = [this, &gather_embedding, batch_nums,
@@ -214,7 +163,6 @@ class GroupEmbeddingVariableLookupCpuOp
                                                int64 start, int64 end) {
           for (int64 i = start; i < end; ++i) {
 #if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
-            __m512 batch_total_weights = _mm512_set1_ps(0.0f);
             int tmp_length = (m_dimension + 15) / 16;
             __m512 tmp_embedding[tmp_length];
             for (int i = 0; i < tmp_length; ++i) {
@@ -222,13 +170,14 @@ class GroupEmbeddingVariableLookupCpuOp
             }
             int batch_offset = i == 0 ? 0 : batch_nums[i - 1];
             int batch_num = batch_nums[i] - batch_offset;
+            __m512 _bs = _mm512_set1_ps(batch_num);
             for (int j = 0; j < batch_num; ++j) {
               int unique_indice = unique_idx[batch_offset + j];
               float *u_embedding =
                   unique_embedding_data + unique_indice * m_dimension;
               __m512 _weights =
                   _mm512_set1_ps(*(sp_weights + batch_offset + j));
-              batch_total_weights = _mm512_add_ps(batch_total_weights, _weights);
+              _weights = _mm512_div_ps(_weights, _bs);
               for (int d = 0; d < m_dimension; d += 16) {
                 int index = d / 16;
                 int remain = m_dimension - d;
@@ -239,17 +188,14 @@ class GroupEmbeddingVariableLookupCpuOp
               }
             }
 
-            if (batch_num == 0) batch_total_weights = _mm512_set1_ps(1.0f);
             for (int d = 0; d < m_dimension; d += 16) {
               int index = d / 16;
               int remain = m_dimension - d;
               __mmask16 mask = (remain >= 16 ? 0xffff : (1 << remain) - 1);
-              tmp_embedding[index] = _mm512_div_ps(tmp_embedding[index], batch_total_weights);
               _mm512_mask_storeu_ps(gather_embedding + i * m_dimension + d,
                                     mask, tmp_embedding[index]);
             }
 #else
-            TValue batch_total_weights = 0.0f;
             std::vector<TValue> tmp_embedding(m_dimension, 0.0f);
             int batch_offset = i == 0 ? 0 : batch_nums[i - 1];
             int batch_num = batch_nums[i] - batch_offset;
@@ -257,18 +203,12 @@ class GroupEmbeddingVariableLookupCpuOp
               int unique_indice = unique_idx[batch_offset + j];
               float *u_embedding =
                   unique_embedding_data + unique_indice * m_dimension;
-              TValue sp_weight = sp_weights[batch_offset + j];
-              batch_total_weights += sp_weight;
+              TValue sp_weight = sp_weights[batch_offset + j] / batch_num;
               for (int d = 0; d < m_dimension; ++d) {
                 tmp_embedding[d] =
                     std::fma(*(u_embedding + d), sp_weight, tmp_embedding[d]);
               }
             }
-
-            for (int d = 0; d < m_dimension; ++d) {
-              tmp_embedding[d] /= batch_total_weights;
-            }
-
             memcpy(gather_embedding + i * m_dimension, tmp_embedding.data(),
                    sizeof(float) * m_dimension);
 #endif
@@ -340,7 +280,6 @@ class GroupEmbeddingVariableLookupCpuOp
                                                 int64 start, int64 end) {
           for (int64 i = start; i < end; ++i) {
 #if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
-            TValue batch_total_weights = 0.0f;
             int tmp_length = (m_dimension + 15) / 16;
             __m512 tmp_embedding[tmp_length];
             for (int i = 0; i < tmp_length; ++i) {
@@ -348,13 +287,14 @@ class GroupEmbeddingVariableLookupCpuOp
             }
             int batch_offset = i == 0 ? 0 : batch_nums[i - 1];
             int batch_num = batch_nums[i] - batch_offset;
+            __m512 _bs = _mm512_set1_ps(sqrtf(batch_num));
             for (int j = 0; j < batch_num; ++j) {
               int unique_indice = unique_idx[batch_offset + j];
               float *u_embedding =
                   unique_embedding_data + unique_indice * m_dimension;
-	      TValue local_weight = *(sp_weights + batch_offset + j);
-              __m512 _weights = _mm512_set1_ps(local_weight);
-              batch_total_weights = std::fma(local_weight, local_weight, batch_total_weights);
+              __m512 _weights =
+                  _mm512_set1_ps(*(sp_weights + batch_offset + j));
+              _weights = _mm512_div_ps(_weights, _bs);
               for (int d = 0; d < m_dimension; d += 16) {
                 int index = d / 16;
                 int remain = m_dimension - d;
@@ -364,23 +304,15 @@ class GroupEmbeddingVariableLookupCpuOp
                     _item, _weights, tmp_embedding[index], mask);
               }
             }
-            __m512 _total_weights;
-            if (batch_num != 0) {
-              _total_weights = _mm512_set1_ps(sqrtf(batch_total_weights));
-            } else {
-              _total_weights = _mm512_set1_ps(1.0f);
-            }
 
             for (int d = 0; d < m_dimension; d += 16) {
               int index = d / 16;
               int remain = m_dimension - d;
               __mmask16 mask = (remain >= 16 ? 0xffff : (1 << remain) - 1);
-              tmp_embedding[index] = _mm512_div_ps(tmp_embedding[index], _total_weights);
               _mm512_mask_storeu_ps(gather_embedding + i * m_dimension + d,
                                     mask, tmp_embedding[index]);
             }
 #else
-            TValue batch_total_weights = 0.0f;
             std::vector<TValue> tmp_embedding(m_dimension, 0.0f);
             int batch_offset = i == 0 ? 0 : batch_nums[i - 1];
             int batch_num = batch_nums[i] - batch_offset;
@@ -388,23 +320,13 @@ class GroupEmbeddingVariableLookupCpuOp
               int unique_indice = unique_idx[batch_offset + j];
               float *u_embedding =
                   unique_embedding_data + unique_indice * m_dimension;
-              TValue sp_weight = sp_weights[batch_offset + j];
-              batch_total_weights = std::fma(sp_weight, sp_weight, batch_total_weights);
+              TValue sp_weight =
+                  sp_weights[batch_offset + j] / sqrtf(batch_num);
               for (int d = 0; d < m_dimension; ++d) {
                 tmp_embedding[d] =
                     std::fma(u_embedding[d], sp_weight, tmp_embedding[d]);
               }
             }
-
-            if (batch_num != 0) {
-              batch_total_weights = sqrtf(batch_total_weights);
-            } else {
-              batch_total_weights = 1.0f;
-            }
-            for (int d = 0; d < m_dimension; ++d) {
-              tmp_embedding[d] /= batch_total_weights;
-            }
-
             memcpy(gather_embedding + i * m_dimension, tmp_embedding.data(),
                    sizeof(float) * m_dimension);
 #endif
@@ -515,7 +437,6 @@ class GroupVariableLookupCpuOp : public GroupLookupBaseCpuOp<TKey, TValue> {
                             embedding_variable](int64 start, int64 end) {
           for (int64 i = start; i < end; ++i) {
 #if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
-            __m512 batch_total_weights = _mm512_set1_ps(0.0f);
             int tmp_length = (m_dimension + 15) / 16;
             __m512 tmp_embedding[tmp_length];
             for (int i = 0; i < tmp_length; ++i) {
@@ -528,7 +449,8 @@ class GroupVariableLookupCpuOp : public GroupLookupBaseCpuOp<TKey, TValue> {
               int unique_id = unique[unique_indice];
               __m512 _weights =
                   _mm512_set1_ps(*(sp_weights + batch_offset + j));
-              batch_total_weights = _mm512_add_ps(batch_total_weights, _weights);
+              __m512 _bs = _mm512_set1_ps(batch_num);
+              _weights = _mm512_div_ps(_weights, _bs);
               const float *embedding_ptr =
                   embedding_variable + unique_id * m_dimension;
 
@@ -541,33 +463,27 @@ class GroupVariableLookupCpuOp : public GroupLookupBaseCpuOp<TKey, TValue> {
                     _item, _weights, tmp_embedding[index], mask);
               }
             }
-            if (batch_num == 0) batch_total_weights = _mm512_set1_ps(1.0f);
+
             for (int d = 0; d < m_dimension; d += 16) {
               int index = d / 16;
               int remain = m_dimension - d;
               __mmask16 mask = (remain >= 16 ? 0xffff : (1 << remain) - 1);
-              tmp_embedding[index] = _mm512_div_ps(tmp_embedding[index], batch_total_weights);
               _mm512_mask_storeu_ps(emb_vectors + i * m_dimension + d, mask,
                                     tmp_embedding[index]);
             }
 #else
-            TValue batch_total_weights = 0.0f;
             std::vector<TValue> tmp_embedding(m_dimension, 0.0f);
             int batch_offset = i == 0 ? 0 : batch_nums[i - 1];
             int batch_num = batch_nums[i] - batch_offset;
             for (int j = 0; j < batch_num; ++j) {
               int unique_indice = unique_idx[batch_offset + j];
               int unique_id = unique[unique_indice];
-              TValue sp_weight = sp_weights[batch_offset + j];
-              batch_total_weights += sp_weight;
+              TValue sp_weight = sp_weights[batch_offset + j] / batch_num;
               for (int d = 0; d < m_dimension; ++d) {
                 tmp_embedding[d] =
                     std::fma(embedding_variable[unique_id * m_dimension + d],
                              sp_weight, tmp_embedding[d]);
               }
-            }
-            for (int d = 0; d < m_dimension; ++d) {
-              tmp_embedding[d] /= batch_total_weights;
             }
             memcpy(emb_vectors + i * m_dimension, tmp_embedding.data(),
                    sizeof(float) * m_dimension);
@@ -638,7 +554,6 @@ class GroupVariableLookupCpuOp : public GroupLookupBaseCpuOp<TKey, TValue> {
                              embedding_variable](int64 start, int64 end) {
           for (int64 i = start; i < end; ++i) {
 #if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
-            TValue batch_total_weights = 0.0f;
             int tmp_length = (m_dimension + 15) / 16;
             __m512 tmp_embedding[tmp_length];
             for (int i = 0; i < tmp_length; ++i) {
@@ -649,9 +564,10 @@ class GroupVariableLookupCpuOp : public GroupLookupBaseCpuOp<TKey, TValue> {
             for (int j = 0; j < batch_num; ++j) {
               int unique_indice = unique_idx[batch_offset + j];
               int unique_id = unique[unique_indice];
-	      TValue local_weight = *(sp_weights + batch_offset + j);
-              __m512 _weights = _mm512_set1_ps(local_weight);
-              batch_total_weights = std::fma(local_weight, local_weight, batch_total_weights);
+              __m512 _weights =
+                  _mm512_set1_ps(*(sp_weights + batch_offset + j));
+              __m512 _bs = _mm512_set1_ps(sqrtf(batch_num));
+              _weights = _mm512_div_ps(_weights, _bs);
               const float *embedding_ptr =
                   embedding_variable + unique_id * m_dimension;
               for (int d = 0; d < m_dimension; d += 16) {
@@ -663,42 +579,28 @@ class GroupVariableLookupCpuOp : public GroupLookupBaseCpuOp<TKey, TValue> {
                     _item, _weights, tmp_embedding[index], mask);
               }
             }
-            
-	    __m512 _total_weights;
-            if (batch_num != 0) {
-              _total_weights = _mm512_set1_ps(sqrtf(batch_total_weights));
-            } else {
-              _total_weights = _mm512_set1_ps(1.0f);
-            }
 
             for (int d = 0; d < m_dimension; d += 16) {
               int index = d / 16;
               int remain = m_dimension - d;
               __mmask16 mask = (remain >= 16 ? 0xffff : (1 << remain) - 1);
-              tmp_embedding[index] = _mm512_div_ps(tmp_embedding[index], _total_weights);
               _mm512_mask_storeu_ps(emb_vectors + i * m_dimension + d, mask,
                                     tmp_embedding[index]);
             }
 #else
-            TValue batch_total_weights = 0.0f;
             std::vector<TValue> tmp_embedding(m_dimension, 0.0f);
             int batch_offset = i == 0 ? 0 : batch_nums[i - 1];
             int batch_num = batch_nums[i] - batch_offset;
             for (int j = 0; j < batch_num; ++j) {
               int unique_indice = unique_idx[batch_offset + j];
               int unique_id = unique[unique_indice];
-              TValue sp_weight = sp_weights[batch_offset + j];
-              batch_total_weights = std::fma(sp_weight, sp_weight, batch_total_weights);
+              TValue sp_weight =
+                  sp_weights[batch_offset + j] / sqrtf(batch_num);
               for (int d = 0; d < m_dimension; ++d) {
                 tmp_embedding[d] =
                     std::fma(embedding_variable[unique_id * m_dimension + d],
                              sp_weight, tmp_embedding[d]);
               }
-            }
-            if (batch_num != 0) {
-              batch_total_weights = sqrtf(batch_total_weights);
-            } else {
-              batch_total_weights = 1.0f;
             }
             memcpy(emb_vectors + i * m_dimension, tmp_embedding.data(),
                    sizeof(float) * m_dimension);

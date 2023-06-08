@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "tensorflow/core/common_runtime/executor.h"
 
-#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <queue>
@@ -350,11 +349,6 @@ class ExecutorState {
   int64_t start_time_usecs_ = 0;
   // The deadline for the session to complete by. Empty if unspecified.
   absl::optional<absl::Time> deadline_;
-
-  // Maximum number of kernels that can be scheduled inline. If lots of kernels
-  // are ready at the same time, scheduling them in one thread can be very slow.
-  // TODO(fishx): Make it configurable if necessary.
-  static constexpr uint64 kInlineScheduleReadyThreshold = 500;
 
   // Not owned.
   //RendezvousInterface* rendezvous_;
@@ -1345,7 +1339,6 @@ void ExecutorState<PropagatorStateType>::ScheduleReady(
 
   {
     const TaggedNode* curr_expensive_node = nullptr;
-    TaggedNodeSeq expensive_nodes;
     if (inline_ready == nullptr) {
       // Schedule to run all the ready ops in thread pool.
       for (auto& tagged_node : *ready) {
@@ -1359,8 +1352,10 @@ void ExecutorState<PropagatorStateType>::ScheduleReady(
           inline_ready->push_back(tagged_node);
         } else {
           if (curr_expensive_node) {
-            // push_back expensive nodes, we will schdule them later.
-            expensive_nodes.push_back(*curr_expensive_node);
+            // Dispatch to another thread since there is plenty of work to
+            // do for this thread.
+            RunTask(std::bind(&ExecutorState::Process, this,
+                              *curr_expensive_node, scheduled_nsec));
           }
           curr_expensive_node = &tagged_node;
         }
@@ -1372,47 +1367,8 @@ void ExecutorState<PropagatorStateType>::ScheduleReady(
       } else {
         // There are inline nodes to run already. We dispatch this expensive
         // node to other thread.
-        expensive_nodes.push_back(*curr_expensive_node);
-      }
-    }
-
-    if (!expensive_nodes.empty()) {
-      if (expensive_nodes.size() < kInlineScheduleReadyThreshold) {
-        for (auto& tagged_node : expensive_nodes) {
-          RunTask(std::bind(&ExecutorState::Process, this, tagged_node,
-                            scheduled_nsec));
-        }
-      } else {
-        // There are too many ready expensive nodes. Schedule them in child
-        // threads.
-        // TODO(fishx): Apply the same optimization to cheap ops as well since
-        // executing lots of cheap ops in one thread can potentially be the
-        // bottleneck as well.
-        auto it = expensive_nodes.begin();
-        while (it < expensive_nodes.end()) {
-          auto end = it;
-          std::advance(end, kInlineScheduleReadyThreshold);
-          if (end > expensive_nodes.end()) {
-            end = expensive_nodes.end();
-          }
-          TaggedNodeSeq ready_chunk{it, end};
-          RunTask(
-              [this, ready_chunk = std::move(ready_chunk), scheduled_nsec]() {
-                profiler::TraceMe activity(
-                    [&]() {
-                      return strings::StrCat(
-                          "ExecutorState::ScheduleReady::"
-                          "ChildThreadExpensiveNodes#",
-                          "ready_chunk_size=", ready_chunk.size(), "#");
-                    },
-                    profiler::GetTFTraceMeLevel(/*is_expensive=*/false));
-                for (auto& tagged_node : ready_chunk) {
-                  RunTask(std::bind(&ExecutorState::Process, this, tagged_node,
-                                    scheduled_nsec));
-                }
-              });
-          it = end;
-        }
+        RunTask(std::bind(&ExecutorState::Process, this, *curr_expensive_node,
+                          scheduled_nsec));
       }
     }
   }
