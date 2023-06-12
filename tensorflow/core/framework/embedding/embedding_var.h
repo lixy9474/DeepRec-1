@@ -288,10 +288,16 @@ class EmbeddingVar : public ResourceBase {
                      const K* keys,
                      V* output,
                      int64 num_of_keys) {
-    filter_->BatchLookup(context, keys, output,
-                         num_of_keys, default_value_,
-                         default_value_no_permission_);
+    if (IsSingleHbm()) {
+      storage_->BatchLookup(context.gpu_device, keys, 
+		            output, num_of_keys, default_value_);
+    } else {
+      filter_->BatchLookup(context, keys, output,
+                           num_of_keys, default_value_,
+                           default_value_no_permission_);
+    }
   }
+
 #endif
 
   void LookupOrCreate(K key, V* val, V* default_v, int count = 1)  {

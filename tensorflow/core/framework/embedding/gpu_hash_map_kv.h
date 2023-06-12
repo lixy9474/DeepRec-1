@@ -256,11 +256,19 @@ class GPUHashMapKV : public KVInterface<K, V> {
 
   GPUHashTable<K, V>* HashTable() override { return hash_table_; }
 
-  Status BatchLookup(const K* keys, V* val, V* default_v, int32 default_v_num,
-                     bool is_use_default_value_tensor, size_t n,
-                     const Eigen::GpuDevice& device) override {
-    functor::KvLookupKey<Eigen::GpuDevice, K, V>()(
-        keys, val, n, value_len_, static_hash_table_, device.stream());
+  Status BatchLookup(const Eigen::GpuDevice& device, const K* keys,
+		      V* val, size_t n, const V* default_v) override {
+    if (is_inference_) {
+      functor::KvLookupKey<GPUStaticHashTable<K, V>, K, V>()(
+        keys, val, n, value_len_, config_.emb_index,
+        (config_.block_num * (1 + config_.slot_num)), config_.default_value_dim,
+	static_hash_table_, default_v, device.stream());   
+    } else {
+      functor::KvLookupKey<GPUHashTable<K, V>, K, V>()(
+        keys, val, n, value_len_, config_.emb_index, 
+	(config_.block_num * (1 + config_.slot_num)), config_.default_value_dim,
+	hash_table_, default_v, device.stream());
+    }
     return Status::OK();
   }
 
