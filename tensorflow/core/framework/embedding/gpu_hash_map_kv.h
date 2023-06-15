@@ -252,8 +252,6 @@ class GPUHashMapKV : public KVInterface<K, V> {
 
   std::string DebugString() const override { return std::string(); }
 
-  Iterator* GetIterator() override { return nullptr; }
-
   GPUHashTable<K, V>* HashTable() override { return hash_table_; }
 
   Status BatchLookup(const K* keys, V* val, V* default_v, int32 default_v_num,

@@ -240,68 +240,34 @@ class SingleTierStorage : public Storage<K, V> {
 
   Status GetSnapshot(std::vector<K>* key_list,
       std::vector<ValuePtr<V>*>* value_ptr_list) override {
+    mutex_lock l(Storage<K, V>::mu_);
     return kv_->GetSnapshot(key_list, value_ptr_list);
   }
 
-  virtual int64 GetSnapshot(std::vector<K>* key_list,
-      std::vector<V* >* value_list,
-      std::vector<int64>* version_list,
-      std::vector<int64>* freq_list,
+  Status Save(
+      const std::string& tensor_name,
+      const std::string& prefix,
+      BundleWriter* writer,
       const EmbeddingConfig& emb_config,
-      FilterPolicy<K, V, EmbeddingVar<K, V>>* filter,
-      embedding::Iterator** it) override {
+      ShrinkArgs& shrink_args,
+      int64 value_len,
+      V* default_value) override {
     std::vector<ValuePtr<V>*> value_ptr_list;
     std::vector<K> key_list_tmp;
-    TF_CHECK_OK(kv_->GetSnapshot(&key_list_tmp, &value_ptr_list));
-    if (key_list_tmp.empty()) {
-      *it = kv_->GetIterator();
-      return 0;
+    TF_CHECK_OK(kv_->GetSnapshot(
+        &key_list_tmp, &value_ptr_list));
+
+    if (emb_config.is_primary()) {
+      Shrink(key_list_tmp, value_ptr_list, shrink_args, value_len);
     }
-    for (int64 i = 0; i < key_list_tmp.size(); ++i) {
-      V* val = value_ptr_list[i]->GetValue(emb_config.emb_index,
-        Storage<K, V>::GetOffset(emb_config.emb_index));
-      V* primary_val = value_ptr_list[i]->GetValue(
-          emb_config.primary_emb_index,
-          Storage<K, V>::GetOffset(emb_config.primary_emb_index));
-      key_list->emplace_back(key_list_tmp[i]);
-      if (emb_config.filter_freq != 0 || emb_config.record_freq) {
-        int64 dump_freq = filter->GetFreq(
-            key_list_tmp[i], value_ptr_list[i]);
-        freq_list->emplace_back(dump_freq);
-      }
-      if (emb_config.steps_to_live != 0 || emb_config.record_version) {
-        int64 dump_version = value_ptr_list[i]->GetStep();
-        version_list->emplace_back(dump_version);
-      }
-      if (val != nullptr && primary_val != nullptr) {
-        value_list->emplace_back(val);
-      } else if (val == nullptr && primary_val != nullptr) {
-        // only forward, no backward
-        value_list->emplace_back(reinterpret_cast<V*>(-1));
-      } else {
-        // feature filtered
-        value_list->emplace_back(nullptr);
-      }
-    } 
-    return key_list->size();
-  }
 
-  int64 GetSnapshotWithoutFetchPersistentEmb(
-      std::vector<K>* key_list,
-      std::vector<V* >* value_list,
-      std::vector<int64>* version_list,
-      std::vector<int64>* freq_list,
-      const EmbeddingConfig& emb_config,
-      SsdRecordDescriptor<K>* ssd_rec_desc) override {
-    LOG(FATAL)<<"The Storage dosen't use presisten memory"
-              <<" or this storage hasn't suppported "
-              <<" GetSnapshotWithoutFetchPersistentEmb yet";
-    return -1;
-  }
-
-  virtual embedding::Iterator* GetIterator() override {
-    LOG(FATAL)<<"GetIterator isn't support by "<<typeid(this).name();
-    return nullptr;
+    TF_CHECK_OK((Storage<K, V>::SaveToCheckpoint(
+        tensor_name, writer,
+        emb_config,
+        value_len, default_value,
+        key_list_tmp,
+        value_ptr_list)));
+    return Status::OK();
   }
 
   void RestoreSsdHashmap(
@@ -316,12 +282,6 @@ class SingleTierStorage : public Storage<K, V> {
   virtual void ImportToHbm (
       K* ids, int64 size, int64 value_len, int64 emb_index) override {
     LOG(FATAL)<<"This Storage dosen't have a HBM storage.";
-  }
-
-  Status Shrink(const ShrinkArgs& shrink_args) override {
-    mutex_lock l(Storage<K, V>::mu_);
-    shrink_policy_->Shrink(shrink_args);
-    return Status::OK();
   }
 
   void SetAllocLen(int64 value_len, int slot_num) override {
@@ -354,14 +314,6 @@ class SingleTierStorage : public Storage<K, V> {
     return false;
   }
 
-  void iterator_mutex_lock() override {
-    return;
-  }
-
-  void iterator_mutex_unlock() override {
-    return;
-  }
-
   void Schedule(std::function<void()> fn) override {
     LOG(FATAL) << "Unsupport Schedule in SingleTierStorage.";
   }
@@ -376,6 +328,18 @@ class SingleTierStorage : public Storage<K, V> {
   virtual void DestroyValuePtr(ValuePtr<V>* value_ptr) {
     value_ptr->Destroy(alloc_);
     delete value_ptr;
+  }
+ protected:
+  virtual void Shrink(std::vector<K>& key_list,
+                      std::vector<ValuePtr<V>*>& value_ptr_list,
+                      ShrinkArgs& shrink_args,
+                      int64 value_len) {
+    mutex_lock l(Storage<K, V>::mu_);
+    shrink_args.value_len = value_len;
+    shrink_policy_->Shrink(
+        key_list,
+        value_ptr_list,
+        shrink_args);
   }
 
  protected:
@@ -421,6 +385,17 @@ class DramStorage : public SingleTierStorage<K, V> {
   void SetTotalDims(int64 total_dims) override {
     SingleTierStorage<K, V>::kv_->SetTotalDims(total_dims);
   }
+
+  void Shrink(std::vector<K>& key_list,
+              std::vector<ValuePtr<V>*>& value_ptr_list,
+              ShrinkArgs& shrink_args,
+              int64 value_len) override {
+    SingleTierStorage<K, V>::Shrink(
+        key_list,
+        value_ptr_list,
+        shrink_args,
+        value_len);
+  }
 };
 
 #if GOOGLE_CUDA
@@ -461,18 +436,33 @@ class HbmStorage : public SingleTierStorage<K, V> {
     SingleTierStorage<K, V>::kv_->BatchLookup(key, val, default_v, default_v_num,
         is_use_default_value_tensor, n, device);
   }
-  
-  int64 GetSnapshot(std::vector<K>* key_list,
-      std::vector<V* >* value_list,
-      std::vector<int64>* version_list,
-      std::vector<int64>* freq_list,
+
+  Status Save(
+      const string& tensor_name,
+      const string& prefix,
+      BundleWriter* writer,
       const EmbeddingConfig& emb_config,
-      FilterPolicy<K, V, EmbeddingVar<K, V>>* filter,
-      embedding::Iterator** it) override {
+      ShrinkArgs& shrink_args,
+      int64 value_len,
+      V* default_value) override {
+    std::vector<V*> value_ptr_list;
+    std::vector<K> key_list_tmp;
     GPUHashMapKV<K, V>* gpu_kv =
         dynamic_cast<GPUHashMapKV<K, V>*>(SingleTierStorage<K, V>::kv_);
-    gpu_kv->GetSnapshot(key_list, value_list, emb_config);
-    return key_list->size();
+    gpu_kv->GetSnapshot(&key_list_tmp, &value_ptr_list, emb_config);
+
+    TF_CHECK_OK((Storage<K, V>::SaveToCheckpoint(
+        tensor_name, writer,
+        value_len,
+        key_list_tmp,
+        value_ptr_list)));
+
+    if (value_ptr_list.size() > 0) {
+      TypedAllocator::Deallocate(
+          cpu_allocator(), value_ptr_list[0],
+          value_ptr_list.size() * value_len);
+    }
+    return Status::OK();
   }
 
   void ImportToHbm(
@@ -526,6 +516,17 @@ class HbmStorageWithCpuKv: public SingleTierStorage<K, V> {
   friend class HbmDramSsdStorage<K, V>;
  protected:
   void SetTotalDims(int64 total_dims) override {}
+
+  void Shrink(std::vector<K>& key_list,
+              std::vector<ValuePtr<V>*>& value_ptr_list,
+              ShrinkArgs& shrink_args,
+              int64 value_len) override {
+    SingleTierStorage<K, V>::Shrink(
+        key_list,
+        value_ptr_list,
+        shrink_args,
+        value_len);
+  }
 };
 #endif // GOOGLE_CUDA
 
@@ -562,6 +563,17 @@ class PmemLibpmemStorage : public SingleTierStorage<K, V> {
  protected:
   friend class DramPmemStorage<K, V>;
   void SetTotalDims(int64 total_dims) override {}
+
+  void Shrink(std::vector<K>& key_list,
+              std::vector<ValuePtr<V>*>& value_ptr_list,
+              ShrinkArgs& shrink_args,
+              int64 value_len) override {
+    SingleTierStorage<K, V>::Shrink(
+        key_list,
+        value_ptr_list,
+        shrink_args,
+        value_len);
+  }
 };
 
 template<typename K, typename V>
@@ -579,10 +591,13 @@ class LevelDBStore : public SingleTierStorage<K, V> {
     return SingleTierStorage<K, V>::kv_->Commit(keys, value_ptr);
   }
 
-  embedding::Iterator* GetIterator() override {
+  embedding::ValueIterator<V>* GetValueIterator(
+      const std::vector<K>& key_list,
+      int64 emb_index, int64 value_len) {
     LevelDBKV<K, V>* leveldb_kv =
         reinterpret_cast<LevelDBKV<K, V>*>(SingleTierStorage<K, V>::kv_);
-    return leveldb_kv->GetIterator();
+    return new DBValueIterator<K, V>(
+        key_list, emb_index, value_len, leveldb_kv);
   }
  public:
   friend class DramLevelDBStore<K, V>;
@@ -608,10 +623,25 @@ class SsdHashStorage : public SingleTierStorage<K, V> {
     return SingleTierStorage<K, V>::kv_->Commit(keys, value_ptr);
   }
 
-  embedding::Iterator* GetIterator() override {
-    SSDHashKV<K, V>* ssd_kv =
-        reinterpret_cast<SSDHashKV<K, V>*>(SingleTierStorage<K, V>::kv_);
-    return ssd_kv->GetIterator();
+  Status Save(
+      const string& tensor_name,
+      const string& prefix,
+      BundleWriter* writer,
+      const EmbeddingConfig& emb_config,
+      ShrinkArgs& shrink_args,
+      int64 value_len,
+      V* default_value) override {
+    if (emb_config.is_primary()) {
+      SSDHashKV<K, V>* ssd_kv =
+          reinterpret_cast<SSDHashKV<K, V>*>(SingleTierStorage<K, V>::kv_);
+      SsdRecordDescriptor<K> ssd_rec_desc;
+      {
+        mutex_lock l(Storage<K, V>::mu_);
+        ssd_kv->SetSsdRecordDescriptor(&ssd_rec_desc);
+      }
+      ssd_rec_desc.GenerateCheckpoint(prefix, tensor_name);
+    }
+    return Status::OK();
   }
 
   void Import(K* key_list, int64* key_file_id_list,

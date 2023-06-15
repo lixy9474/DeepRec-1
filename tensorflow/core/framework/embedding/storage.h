@@ -17,6 +17,7 @@ limitations under the License.
 
 #include "tensorflow/core/framework/embedding/cache.h"
 #include "tensorflow/core/framework/embedding/config.pb.h"
+#include "tensorflow/core/framework/embedding/embedding_var_ckpt_data.h"
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/framework/embedding/shrink_policy.h"
 #include "tensorflow/core/framework/embedding/storage_config.h"
@@ -95,28 +96,20 @@ class Storage {
   virtual int64 Size(int level) const = 0;
   virtual Status GetSnapshot(std::vector<K>* key_list,
       std::vector<ValuePtr<V>*>* value_ptr_list) = 0;
-  virtual int64 GetSnapshot(std::vector<K>* key_list,
-      std::vector<V* >* value_list,
-      std::vector<int64>* version_list,
-      std::vector<int64>* freq_list,
+  virtual Status Save(
+      const string& tensor_name,
+      const string& prefix,
+      BundleWriter* writer,
       const EmbeddingConfig& emb_config,
-      FilterPolicy<K, V, EmbeddingVar<K, V>>* filter,
-      embedding::Iterator** it) = 0;
-  virtual int64 GetSnapshotWithoutFetchPersistentEmb(
-      std::vector<K>* key_list,
-      std::vector<V* >* value_list,
-      std::vector<int64>* version_list,
-      std::vector<int64>* freq_list,
-      const EmbeddingConfig& emb_config,
-      SsdRecordDescriptor<K>* ssd_rec_desc) = 0;
-  virtual embedding::Iterator* GetIterator() = 0;
+      ShrinkArgs& shrink_args,
+      int64 value_len,
+      V* default_value) = 0;
   virtual void RestoreSsdHashmap(
       K* key_list, int64* key_file_id_list,
       int64* key_offset_list, int64 num_of_keys,
       int64* file_list, int64* invalid_record_count_list,
       int64* record_count_list, int64 num_of_files,
       const std::string& ssd_emb_file_name) = 0;
-  virtual Status Shrink(const ShrinkArgs& shrink_args) = 0;
 
   virtual Status BatchCommit(const std::vector<K>& keys,
       const std::vector<ValuePtr<V>*>& value_ptrs) = 0;
@@ -155,8 +148,6 @@ class Storage {
   virtual bool IsUseHbm() = 0;
   virtual bool IsSingleHbm() = 0;
   virtual bool IsUsePersistentStorage() = 0;
-  virtual void iterator_mutex_lock() = 0;
-  virtual void iterator_mutex_unlock() = 0;
   virtual void Schedule(std::function<void()> fn) = 0;
   virtual void CreateEmbeddingMemoryPool(
       Allocator* alloc,
@@ -212,6 +203,95 @@ class Storage {
   virtual void AddToCachePrefetchList(const Tensor& indices) {}
 
   virtual void AddToCache(const Tensor& indices) {}
+
+ private:
+  void GeneratePartitionedCkptData(
+      const std::vector<K>& key_list,
+      const std::vector<ValuePtr<V>*>& value_ptr_list,
+      EmbeddingVarCkptData<K, V>* partitioned_ckpt_data,
+      const EmbeddingConfig& emb_config,
+      V* default_value) {
+    std::vector<EmbeddingVarCkptData<K, V>>
+        ev_ckpt_data_parts(kSavedPartitionNum);
+
+    bool save_unfiltered_features = true;
+    TF_CHECK_OK(ReadBoolFromEnvVar(
+        "TF_EV_SAVE_FILTERED_FEATURES", true, &save_unfiltered_features));
+
+    bool is_save_freq = emb_config.is_save_freq();
+    bool is_save_version = emb_config.is_save_version();
+
+    for (int64 i = 0; i < key_list.size(); i++) {
+      for (int part_id = 0; part_id < kSavedPartitionNum; part_id++) {
+        if (key_list[i] % kSavedPartitionNum == part_id) {
+          ev_ckpt_data_parts[part_id].Emplace(
+              key_list[i], value_ptr_list[i],
+              emb_config, default_value,
+              GetOffset(emb_config.emb_index),
+              is_save_freq,
+              is_save_version,
+              save_unfiltered_features);
+          break;
+        }
+      }
+    }
+
+    partitioned_ckpt_data->SetWithPartition(ev_ckpt_data_parts);
+  }
+
+  void GeneratePartitionedCkptData(
+      const std::vector<K>& key_list,
+      const std::vector<V*>& value_ptr_list,
+      EmbeddingVarCkptData<K, V>* partitioned_ckpt_data) {
+    std::vector<EmbeddingVarCkptData<K, V>>
+        ev_ckpt_data_parts(kSavedPartitionNum);
+
+    for (int64 i = 0; i < key_list.size(); i++) {
+      for (int part_id = 0; part_id < kSavedPartitionNum; part_id++) {
+        if (key_list[i] % kSavedPartitionNum == part_id) {
+          ev_ckpt_data_parts[part_id].Emplace(
+              key_list[i], value_ptr_list[i]);
+          break;
+        }
+      }
+    }
+
+    partitioned_ckpt_data->SetWithPartition(ev_ckpt_data_parts);
+  }
+
+ protected:
+  Status SaveToCheckpoint(
+      const string& tensor_name,
+      BundleWriter* writer,
+      const EmbeddingConfig& emb_config,
+      int64 value_len,
+      V* default_value,
+      const std::vector<K>& key_list,
+      const std::vector<ValuePtr<V>*>& value_ptr_list,
+      ValueIterator<V>* value_iter = nullptr) {
+    EmbeddingVarCkptData<K, V> partitioned_ckpt_data;
+    GeneratePartitionedCkptData(key_list, value_ptr_list,
+                                &partitioned_ckpt_data, emb_config,
+                                default_value);
+    Status s =
+        partitioned_ckpt_data.ExportToCkpt(
+            tensor_name, writer, value_len, value_iter);
+    return Status::OK();
+  }
+
+  Status SaveToCheckpoint(
+      const string& tensor_name,
+      BundleWriter* writer,
+      int64 value_len,
+      const std::vector<K>& key_list,
+      const std::vector<V*>& value_ptr_list) {
+    EmbeddingVarCkptData<K, V> partitioned_ckpt_data;
+    GeneratePartitionedCkptData(key_list, value_ptr_list,
+                                &partitioned_ckpt_data);
+    Status s =
+        partitioned_ckpt_data.ExportToCkpt(tensor_name, writer, value_len);
+    return Status::OK();
+  }
 
  protected:
   int64 alloc_len_ = 0;
