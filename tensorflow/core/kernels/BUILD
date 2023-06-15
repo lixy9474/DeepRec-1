@@ -5418,7 +5418,8 @@ tf_kernel_library(
 
 tf_kernel_library(
     name = "group_embedding_ops",
-    hdrs = ["group_embedding/group_embedding_lookup_sparse_forward_base_ops.h"],
+    hdrs = ["group_embedding/group_embedding_lookup_sparse_forward_base_ops.h",
+            ],
     srcs = ["group_embedding/group_embedding_lookup_ops.cc",
             "group_embedding/group_embedding_lookup_sparse_forward_ops.cc",
             "group_embedding/group_embedding_lookup_sparse_backward_ops.cc",],
@@ -5428,14 +5429,14 @@ tf_kernel_library(
                 "group_embedding/group_embedding_lookup_sparse_backward_ops.cu.cc",],
     deps = ["//third_party/eigen3",
             "//tensorflow/core/kernels:gpu_device_array",
+            "//tensorflow/core/util/tensor_bundle",
             ":training_op_helpers",
             ":variable_ops",
+            ":save_restore_tensor",
             "//tensorflow/core:embedding_gpu",
             "@sparsehash_c11//:dense_hash_map",
             "@libcuckoo//:libcuckoo",
             ":unique_ali_op",
-            ":save_restore_tensor",
-            "//tensorflow/core/util/tensor_bundle",
             "@com_github_google_leveldb//:leveldb",] + DYNAMIC_DEPS + mkl_deps() +
            if_cuda(["@cub_archive//:cub",
                     ":fused_embedding_common_cuh",
