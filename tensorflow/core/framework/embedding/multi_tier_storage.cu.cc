@@ -44,12 +44,12 @@ template <class K, class V>
 void MultiTierStorage<K, V>::CopyEmbeddingsFromDramToHbm(
     const EmbeddingVarContext<GPUDevice>& ctx,
     const K* keys,
-    ValuePtr<V>** value_ptr_list,
+    void** value_ptr_list,
     std::list<int64>& copyback_cursor,
     const std::vector<int64>& memory_index,
-    const std::vector<ValuePtr<V>*>& gpu_value_ptrs,
+    const std::vector<void*>& gpu_value_ptrs,
     int value_len) {
-  if (copyback_cursor.size() > 0) {
+  /*if (copyback_cursor.size() > 0) {
     int total = copyback_cursor.size();
     //Alocate memcpy buffer on CPU and GPU.
     Allocator* gpu_alloc = ctx.gpu_allocator;
@@ -115,13 +115,13 @@ void MultiTierStorage<K, V>::CopyEmbeddingsFromDramToHbm(
     gpu_alloc->DeallocateRaw(memcpy_buffer_gpu);
     cpu_allocator()->DeallocateRaw(value_address);
     cpu_allocator()->DeallocateRaw(memcpy_buffer_cpu);
-  }
+  }*/
 }
 #define REGISTER_KERNELS(ktype, vtype)                                        \
   template void MultiTierStorage<ktype, vtype>::CopyEmbeddingsFromDramToHbm(       \
-      const EmbeddingVarContext<GPUDevice>&, const ktype*, ValuePtr<vtype>**,\
+      const EmbeddingVarContext<GPUDevice>&, const ktype*, void**,\
       std::list<int64>&, const std::vector<int64>&,\
-      const std::vector<ValuePtr<vtype>*>&, int);
+      const std::vector<void*>&, int);
 #define REGISTER_KERNELS_ALL(type) \
   REGISTER_KERNELS(int32, type);   \
   REGISTER_KERNELS(int64, type)

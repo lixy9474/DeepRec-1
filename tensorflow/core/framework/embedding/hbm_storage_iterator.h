@@ -28,13 +28,13 @@ class HbmValueIterator: public ValueIterator<V> {
  public:
   HbmValueIterator(
       const std::vector<K>& key_list,
-      const std::vector<ValuePtr<V>*>& value_ptr_list,
+      const std::vector<void*>& value_ptr_list,
       int64 emb_index,
       int64 value_len,
       Allocator* alloc)
       : value_len_(value_len),
         alloc_(alloc) {
-    int64 emb_offset = value_len_ * emb_index;
+    /*int64 emb_offset = value_len_ * emb_index;
     std::vector<std::list<V*>> value_parts_vec(kSavedPartitionNum);
     for (int64 i = 0; i < key_list.size(); i++) {
       for (int part_id = 0; part_id < kSavedPartitionNum; part_id++) {
@@ -60,7 +60,7 @@ class HbmValueIterator: public ValueIterator<V> {
         Allocator::kAllocatorAlignment,
         buffer_capacity_ * sizeof(V));
 
-    FillEmbeddingBuffer();
+    FillEmbeddingBuffer();*/
   }
 
   ~HbmValueIterator() {

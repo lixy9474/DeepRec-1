@@ -139,13 +139,16 @@ class KvSparseApplyAdagradOp : public OpKernel {
         auto do_work = [this, ctx, &indices_vec, var, accum, &grad_flat,
             &gs, &lr_scalar, indices_counts, get_count_fn]
             (int64 start_i, int64 limit_i) {
+          std::vector<EmbeddingVar<TKey, T>*> slot_vars;
+          slot_vars.emplace_back(accum);
           for (int64 i = start_i; i < limit_i; i++) {
             const TKey index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
+
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
-                           &is_filter, indices_as_pointer, count));
+                           &is_filter, indices_as_pointer, slot_vars, count));
             var->UpdateVersion(value_ptr, gs);
             if (is_filter) {
               auto a = accum->flat(value_ptr, index);
@@ -547,13 +550,16 @@ class KvSparseApplyFtrlOp : public OpKernel {
                        &l2_shrinkage_scalar, &lr_power_scalar,
                        get_count_fn, indices_counts]
             (int64 start_i, int64 limit_i) {
+          std::vector<EmbeddingVar<TKey, T>*> slot_vars;
+          slot_vars.emplace_back(accum_);
+          slot_vars.emplace_back(linear_);
           for (int64 i = start_i; i < limit_i; i++) {
             const TKey index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var_->LookupOrCreateKey(index, &value_ptr,
-                           &is_filter, indices_as_pointer, count));
+                           &is_filter, indices_as_pointer, slot_vars, count));
             if (is_filter) {
               auto var = var_->flat(value_ptr, index);
               auto accum = accum_->flat(value_ptr, index);
@@ -1306,13 +1312,16 @@ class KvSparseApplyAdagradDecayOp : public OpKernel {
             &decay_rate_scalar, &decay_baseline_scalar, &lr_scalar,
             get_count_fn, indices_counts]
             (int64 start_i, int64 limit_i) {
+          std::vector<EmbeddingVar<Tindex, T>*> slot_vars;
+          slot_vars.emplace_back(accum);
+          slot_vars.emplace_back(accum_decay_power_var);
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
-                           &is_filter, indices_as_pointer, count));
+                           &is_filter, indices_as_pointer, slot_vars, count));
             var->UpdateVersion(value_ptr, gs);
             if (is_filter) {
               auto a = accum->flat(value_ptr, index);
@@ -1512,14 +1521,16 @@ class KvSparseApplyAdamOp : public OpKernel {
           auto indices_vec = indices.vec<Tindex>();
 
           int64 gs = global_step.scalar<int64>()();
-
+          std::vector<EmbeddingVar<Tindex, T>*> slot_vars;
+          slot_vars.emplace_back(m);
+          slot_vars.emplace_back(v);
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter =false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
-                           &is_filter, indices_as_pointer, count));
+                           &is_filter, indices_as_pointer, slot_vars, count));
             var->UpdateVersion(value_ptr, gs);
             if (is_filter) {
               auto var_i = var->flat(value_ptr, index);
@@ -2417,9 +2428,12 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
             get_count_fn, indices_counts]
             (int64 start_i, int64 limit_i) {
           Tstep gs = global_step.scalar<Tstep>()();
+          std::vector<EmbeddingVar<Tindex, T>*> slot_vars;
+          slot_vars.emplace_back(v);
+          slot_vars.emplace_back(m);
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
@@ -2465,14 +2479,17 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
             auto grad_flat = grad.flat_outer_dims<T>();
             auto indices_vec = indices.vec<Tindex>();
             Tstep gs = global_step.scalar<Tstep>()();
+            std::vector<EmbeddingVar<Tindex, T>*> slot_vars;
+            slot_vars.emplace_back(v);
+            slot_vars.emplace_back(m);
 
             for (int64 i = start_i; i < limit_i; i++) {
               const Tindex index = indices_vec(i);
-              ValuePtr<T>* value_ptr = nullptr;
+              void* value_ptr = nullptr;
               bool is_filter = false;
               int64 count = get_count_fn(indices_counts, i);
               OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
-                             &is_filter, indices_as_pointer, count));
+                             &is_filter, indices_as_pointer, slot_vars, count));
               var->UpdateVersion(value_ptr, gs);
               if (is_filter) {
                 auto m_a = m->flat(value_ptr, index);
@@ -2952,13 +2969,14 @@ class KvResourceSparseApplyGradientDescentOp : public OpKernel {
         auto do_work = [this, ctx, &indices_vec, var, &grad_flat, &gs,
             &lr_scalar, indices_counts, get_count_fn]
             (int64 start_i, int64 limit_i) {
+          std::vector<EmbeddingVar<Tindex, T>*> slot_vars;
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
-                           &is_filter, indices_as_pointer, count));
+                           &is_filter, indices_as_pointer, slot_vars, count));
             var->UpdateVersion(value_ptr, gs);
             if (is_filter) {
               auto g = grad_flat.template chip<0>(i);
@@ -3148,10 +3166,13 @@ class KvSparseApplyAdamWOp : public OpKernel {
           auto indices_vec = indices.vec<Tindex>();
 
           int64 gs = global_step.scalar<int64>()();
+          std::vector<EmbeddingVar<Tindex, T>*> slot_vars;
+          slot_vars.emplace_back(v);
+          slot_vars.emplace_back(m);
 
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter =false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,

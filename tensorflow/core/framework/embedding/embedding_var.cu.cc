@@ -47,7 +47,7 @@ void EmbeddingVar<K, V>::SetDefaultValueOfNewFeatures(
     const K* keys, int64 size, const std::list<int64>& init_cursor,
     V** memcpy_address, se::Stream* compute_stream, EventMgr* event_mgr,
     const Eigen::GpuDevice& gpu_device) {
-  if (init_cursor.size() > 0) {
+  /*if (init_cursor.size() > 0) {
     int64 total = init_cursor.size();
     V** value_address = nullptr;
     value_address = TypedAllocator::Allocate<V*>(cpu_allocator(), total * 2,
@@ -90,7 +90,7 @@ void EmbeddingVar<K, V>::SetDefaultValueOfNewFeatures(
     }
     TypedAllocator::Deallocate(alloc_, dev_value_address, total * 2);
     TypedAllocator::Deallocate(cpu_allocator(), value_address, total * 2);
-  }
+  }*/
 }
 
 #define REGISTER_KERNELS(ktype, vtype)                                        \
@@ -146,7 +146,7 @@ void EmbeddingVar<K, V>::CopyEmbeddingsFromCPUToGPU(
     const Eigen::GpuDevice& gpu_device,
     const DeviceBase::CpuWorkerThreads* worker_threads,
     int64* output_value_ptrs) {
-  if (copyback_cursor.size() > 0) {
+  /*if (copyback_cursor.size() > 0) {
     int64 total = copyback_cursor.size();
     size_t value_len = emb_config_.total_num(storage_->GetAllocLen());
     V* memcpy_buffer_gpu = nullptr;
@@ -202,7 +202,7 @@ void EmbeddingVar<K, V>::CopyEmbeddingsFromCPUToGPU(
     alloc_->DeallocateRaw(memcpy_buffer_gpu);
     cpu_allocator()->DeallocateRaw(value_address);
     delete[] gpu_value_ptrs;
-  }
+  }*/
 }
 #define REGISTER_KERNELS(ktype, vtype)                                        \
   template void EmbeddingVar<ktype, vtype>::CopyEmbeddingsFromCPUToGPU(       \

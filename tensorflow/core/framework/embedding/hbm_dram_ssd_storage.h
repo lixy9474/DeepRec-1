@@ -22,15 +22,14 @@ namespace embedding {
 template<typename K, typename V>
 class HbmDramSsdStorage : public MultiTierStorage<K, V> {
  public:
-  HbmDramSsdStorage(const StorageConfig& sc, Allocator* gpu_alloc,
-      Allocator* cpu_alloc, LayoutCreator<V>* lc, const std::string& name)
-      : cpu_alloc_(cpu_alloc), gpu_alloc_(gpu_alloc),
-        MultiTierStorage<K, V>(sc, name),
+  HbmDramSsdStorage(const StorageConfig& sc, 
+    FeatureDescriptor<V>* feat_desc, const std::string& name)
+      : MultiTierStorage<K, V>(sc, name),
         dram_capacity_(-1) {
-    hbm_ = new HbmStorageWithCpuKv<K, V>(sc, gpu_alloc_, lc);
-    dram_ = new DramStorage<K, V>(sc, cpu_alloc_, lc,
-        new LocklessHashMapCPU<K, V>(gpu_alloc_));
-    ssd_ = new SsdHashStorage<K, V>(sc, cpu_alloc_, lc);
+    hbm_ = new HbmStorageWithCpuKv<K, V>(sc, feat_desc);
+    //FeatureDescriptor<V>* dram_feat_desc = feat_desc->NewDramFeatDesc();
+    //dram_ = new DramStorage<K, V>(sc, dram_feat_desc);
+    //ssd_ = new SsdHashStorage<K, V>(sc, dram_feat_desc);
   }
 
   ~HbmDramSsdStorage() override {
@@ -64,33 +63,19 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
     Storage<K, V>::flag_.clear(std::memory_order_release);
   }
 
-  Status Get(K key, ValuePtr<V>** value_ptr) override {
-    Status s = hbm_->Get(key, value_ptr);
-    if (s.ok()) {
-      return s;
-    }
-    s = dram_->Get(key, value_ptr);
-    if (s.ok()) {
-      AddCopyBackFlagToValuePtr(value_ptr, COPYBACK);
-      return s;
-    }
-    s = ssd_->Get(key, value_ptr);
-    if (s.ok()) {
-      AddCopyBackFlagToValuePtr(value_ptr, COPYBACK_AND_DESTROY);
-      return s;
-    }
-    return s;
+  Status Get(K key, void** value_ptr) override {
+    LOG(FATAL)<<"Stroage with HBM only suppotrs batch APIs.";
   }
 
   void BatchGet(const EmbeddingVarContext<GPUDevice>& ctx,
                 const K* keys,
-                ValuePtr<V>** value_ptr_list,
+                void** value_ptr_list,
                 int64 num_of_keys,
                 int64 value_len) override {
     int num_worker_threads = ctx.worker_threads->num_threads;
     std::vector<std::list<int64>>
         copyback_cursor_list(num_worker_threads + 1);
-    std::vector<std::list<ValuePtr<V>*>>
+    std::vector<std::list<void*>>
         ssd_value_ptr_list(num_worker_threads + 1);
 
     BatchGetValuePtrs(ctx, keys, value_ptr_list, num_of_keys,
@@ -104,14 +89,14 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
   void BatchGetOrCreate(
       const EmbeddingVarContext<GPUDevice>& ctx,
       const K* keys,
-      ValuePtr<V>** value_ptr_list,
+      void** value_ptr_list,
       int64 num_of_keys,
       int64 value_len,
       std::vector<std::list<int64>>& not_fountd_cursor_list) override {
     int num_worker_threads = ctx.worker_threads->num_threads;
     std::vector<std::list<int64>>
         copyback_cursor_list(num_worker_threads + 1);
-    std::vector<std::list<ValuePtr<V>*>>
+    std::vector<std::list<void*>>
         ssd_value_ptr_list(num_worker_threads + 1);
 
     BatchGetValuePtrs(ctx, keys, value_ptr_list, num_of_keys,
@@ -126,66 +111,23 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
                     not_fountd_cursor_list[0], value_len);
   }
 
-  void Insert(K key, ValuePtr<V>* value_ptr) override {
+  void Insert(K key, void* value_ptr) override {
     hbm_->Insert(key, value_ptr);
   }
 
-  void Insert(K key, ValuePtr<V>** value_ptr,
+  void Insert(K key, void** value_ptr,
               size_t alloc_len) override {
     hbm_->Insert(key, value_ptr, alloc_len);
   }
 
-  void InsertToDram(K key, ValuePtr<V>** value_ptr,
+  void InsertToDram(K key, void** value_ptr,
               int64 alloc_len) override {
     dram_->Insert(key, value_ptr, alloc_len);
   }
 
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
+  Status GetOrCreate(K key, void** value_ptr,
       size_t size) override {
-    Status s = hbm_->Get(key, value_ptr);
-    if (s.ok()) {
-      return s;
-    }
-    ValuePtr<V>* gpu_value_ptr = hbm_->CreateValuePtr(size);
-    {
-      mutex_lock l(memory_pool_mu_);
-      gpu_value_ptr->SetPtr(embedding_mem_pool_->Allocate());
-      *value_ptr = gpu_value_ptr;
-    }
-
-    s = hbm_->TryInsert(key, *value_ptr);
-    // Insert Failed
-    if (!s.ok()) {
-      {
-        mutex_lock l(memory_pool_mu_);
-        embedding_mem_pool_->Deallocate((*value_ptr)->GetValue(0, 0));
-      }
-      delete *value_ptr;
-      return hbm_->Get(key, value_ptr);
-    } else {
-      return s;
-    }
-  }
-
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
-      size_t size, CopyBackFlag &need_copyback) override {
-    need_copyback = NOT_COPYBACK;
-    Status s = hbm_->Get(key, value_ptr);
-    if (s.ok()) {
-      return s;
-    }
-    s = dram_->Get(key, value_ptr);
-    if (s.ok()) {
-      need_copyback = COPYBACK;
-      return s;
-    }
-    s = ssd_->Get(key, value_ptr);
-    if (s.ok()) {
-      need_copyback = COPYBACK_AND_DESTROY;
-      return s;
-    }
-    hbm_->Insert(key, value_ptr, size);
-    return Status::OK();
+    LOG(FATAL)<<"Stroage with HBM only suppotrs batch APIs.";
   }
 
   void InitCache(embedding::CacheStrategy cache_strategy) override {
@@ -195,7 +137,7 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
 
   void ImportToHbm(
       K* ids, int64 size, int64 value_len, int64 emb_index) override {
-    V* memcpy_buffer_cpu = new V[size * value_len];
+    /*V* memcpy_buffer_cpu = new V[size * value_len];
     V** value_address = new V*[size];
     V* memcpy_buffer_gpu =
         (V*)gpu_alloc_->AllocateRaw(
@@ -263,18 +205,18 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
     delete[] gpu_value_ptrs;
     delete[] value_address;
     gpu_alloc_->DeallocateRaw(dev_value_address);
-    gpu_alloc_->DeallocateRaw(memcpy_buffer_gpu);
+    gpu_alloc_->DeallocateRaw(memcpy_buffer_gpu);*/
   }
 
   void CopyEmbeddingsFromCPUToGPU(
       int total, const K* keys,
       const std::list<int64>& copyback_cursor,
       V** memcpy_address, size_t value_len,
-      ValuePtr<V> **gpu_value_ptrs, V* memcpy_buffer_gpu,
+      void **gpu_value_ptrs, V* memcpy_buffer_gpu,
       se::Stream* compute_stream,
       EventMgr* event_mgr,
       const DeviceBase::CpuWorkerThreads* worker_threads) override {
-    auto memcpy_buffer_cpu = TypedAllocator::Allocate<V>(cpu_allocator(),
+    /*auto memcpy_buffer_cpu = TypedAllocator::Allocate<V>(cpu_allocator(),
         total * value_len, AllocationAttributes());
     int64* memory_index = new int64[total];
     int64 i = 0;
@@ -323,7 +265,7 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
     SyncWithEventMgr(compute_stream, event_mgr);
     TypedAllocator::Deallocate(
         cpu_allocator(), memcpy_buffer_cpu, total * value_len);
-    delete[] memory_index;
+    delete[] memory_index;*/
   }
 
   Status Remove(K key) override {
@@ -387,7 +329,7 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
       ShrinkArgs& shrink_args,
       int64 value_len,
       V* default_value) override {
-    std::vector<K> key_list, tmp_dram_key_list;
+    /*std::vector<K> key_list, tmp_dram_key_list;
     std::vector<ValuePtr<V>*> value_ptr_list, tmp_dram_value_list;
     TF_CHECK_OK(hbm_->GetSnapshot(&key_list, &value_ptr_list));
     hbm_->Shrink(key_list, value_ptr_list, shrink_args, value_len);
@@ -440,11 +382,11 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
     ssd_->Save(tensor_name, prefix, writer, emb_config,
                shrink_args, value_len, default_value);
 
-    return Status::OK();
+    return Status::OK();*/
   }
 
   Status DramToSsdBatchCommit(std::shared_ptr<std::vector<K>> keys) {
-    MultiTierStorage<K, V>::ReleaseValuePtrs(dram_value_ptr_out_of_date_,
+    /*MultiTierStorage<K, V>::ReleaseValuePtrs(dram_value_ptr_out_of_date_,
                                              dram_->alloc_);
     mutex_lock l(*(ssd_->get_mutex()));
     mutex_lock l1(*(dram_->get_mutex()));
@@ -457,7 +399,7 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
       k_size = std::min(k_size, DramEvictionSize);
       K dram_evic_ids[DramEvictionSize];
       size_t true_size = dram_cache_->get_evic_ids(dram_evic_ids, k_size);
-      ValuePtr<V>* value_ptr;
+      void* value_ptr;
       for (int64 i = 0; i < true_size; ++i) {
         if (dram_->Get(dram_evic_ids[i], &value_ptr).ok()) {
           TF_CHECK_OK(ssd_->Commit(dram_evic_ids[i], value_ptr));
@@ -466,13 +408,13 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
         }
       }
     }
-    return Status::OK();
+    return Status::OK();*/
   }
 
   void BatchEviction() override {
     constexpr int EvictionSize = 10000;
     K evic_ids[EvictionSize];
-    if (!MultiTierStorage<K, V>::ready_eviction_) {
+    /*if (!MultiTierStorage<K, V>::ready_eviction_) {
       return;
     }
     mutex_lock l(*(hbm_->get_mutex()));
@@ -509,7 +451,7 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
           DramToSsdBatchCommit(keys);
         }
       );
-    }
+    }*/
   }
 
   void CreateEmbeddingMemoryPool(
@@ -521,30 +463,30 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
   }
 
   void AllocateMemoryForNewFeatures(
-      const std::vector<ValuePtr<V>*>& value_ptr_list) override {
+      const std::vector<void*>& value_ptr_list) override {
     //Mutex with eviction thread
-    mutex_lock l(memory_pool_mu_);
+    /*mutex_lock l(memory_pool_mu_);
     for (auto it : value_ptr_list) {
       V* val_ptr = embedding_mem_pool_->Allocate();
       bool flag = it->SetPtr(val_ptr);
       if (!flag) {
         embedding_mem_pool_->Deallocate(val_ptr);
       }
-    }
+    }*/
   }
 
   void AllocateMemoryForNewFeatures(
-     ValuePtr<V>** value_ptr_list,
+     void** value_ptr_list,
      int64 num_of_value_ptrs) override {
     //Mutex with other ImportOps
-    mutex_lock l(memory_pool_mu_);
+    /*mutex_lock l(memory_pool_mu_);
     for (int64 i = 0; i < num_of_value_ptrs; i++) {
       V* val_ptr = embedding_mem_pool_->Allocate();
       bool flag = value_ptr_list[i]->SetPtr(val_ptr);
       if (!flag) {
         embedding_mem_pool_->Deallocate(val_ptr);
       }
-    }
+    }*/
   }
 
  protected:
@@ -554,27 +496,27 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
   }
 
   void CopyToGpuValuePtr(
-      ValuePtr<V>* gpu_ptr,
-      ValuePtr<V>* cpu_ptr,
+      void* gpu_ptr,
+      void* cpu_ptr,
       int64 size) {
-    V* cpu_data_address = cpu_ptr->GetValue(0, 0);
+    /*V* cpu_data_address = cpu_ptr->GetValue(0, 0);
     V* gpu_data_address = gpu_ptr->GetValue(0, 0);
     cudaMemcpy(gpu_data_address, cpu_data_address,
         size * sizeof(V), cudaMemcpyHostToDevice);
     memcpy(gpu_ptr->GetPtr(),
            cpu_ptr->GetPtr(),
-           sizeof(FixedLengthHeader));
+           sizeof(FixedLengthHeader));*/
   }
  private:
   void BatchGetValuePtrs(
       const EmbeddingVarContext<GPUDevice>& ctx,
       const K* keys,
-      ValuePtr<V>** value_ptr_list,
+      void** value_ptr_list,
       int64 num_of_keys,
       std::vector<std::list<int64>>& copyback_cursor_list,
-      std::vector<std::list<ValuePtr<V>*>>& ssd_value_ptr_list,
+      std::vector<std::list<void*>>& ssd_value_ptr_list,
       std::vector<std::list<int64>>* not_found_cursor_list = nullptr) {
-    int num_worker_threads = ctx.worker_threads->num_threads;
+    /*int num_worker_threads = ctx.worker_threads->num_threads;
     IntraThreadCopyIdAllocator thread_copy_id_alloc(num_worker_threads);
     uint64 main_thread_id = Env::Default()->GetCurrentThreadId();
 
@@ -641,16 +583,16 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
               (*not_found_cursor_list)[i]);
         }
       }
-    }
+    }*/
   }
 
   void CopyEmbeddingsFromDramToHbm(const EmbeddingVarContext<GPUDevice>& ctx,
                                    const K* keys,
-                                   ValuePtr<V>** value_ptr_list,
+                                   void** value_ptr_list,
                                    std::list<int64>& copyback_cursors,
-                                   std::list<ValuePtr<V>*>& ssd_value_ptrs,
+                                   std::list<void*>& ssd_value_ptrs,
                                    int64 value_len) {
-    int64 total = copyback_cursors.size();
+    /*int64 total = copyback_cursors.size();
     std::vector<ValuePtr<V>*> gpu_value_ptrs(total);
     std::vector<K> copyback_keys(total);
     std::vector<int64> memory_index(total);
@@ -705,15 +647,15 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
     for (auto it = ssd_value_ptrs.cbegin();
          it != ssd_value_ptrs.cend(); ++it) {
       ssd_->DestroyValuePtr(*it);
-    }
+    }*/
   }
 
   void CreateValuePtrs(const EmbeddingVarContext<GPUDevice>& ctx,
                        const K* keys,
-                       ValuePtr<V>** value_ptr_list,
+                       void** value_ptr_list,
                        std::list<int64>& not_found_cursors,
                        int64 value_len) {
-    int64 total = not_found_cursors.size();
+    /*int64 total = not_found_cursors.size();
     if (total > 0) {
       std::vector<std::pair<int64, ValuePtr<V>*>> insert_pairs(total);
       std::vector<int64> cursor_index(total);
@@ -758,20 +700,20 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
       auto worker_threads = ctx.worker_threads;
       Shard(worker_threads->num_threads, worker_threads->workers,
             total, 100000, do_insert);
-    }
+    }*/
   }
 
   void AddCopyBackFlagToValuePtr(
-      ValuePtr<V>** value_ptr, CopyBackFlag copyback_flag) {
+      void** value_ptr, CopyBackFlag copyback_flag) {
     int64 tmp = ((int64)copyback_flag) << copyback_flag_offset_bits_;
     tmp = ((int64)*value_ptr) | tmp;
-    *value_ptr = reinterpret_cast<ValuePtr<V>*>(tmp);
+    *value_ptr = reinterpret_cast<void*>(tmp);
   }
 
-  void RemoveCopyBackFlagInValuePtr(ValuePtr<V>** value_ptr) {
+  void RemoveCopyBackFlagInValuePtr(void** value_ptr) {
     int64 tmp = (1L << (copyback_flag_offset_bits_)) - 1;
     tmp = ((int64)*value_ptr) & tmp;
-    *value_ptr = reinterpret_cast<ValuePtr<V>*>(tmp);
+    *value_ptr = reinterpret_cast<void*>(tmp);
   }
 
  private:
@@ -783,7 +725,7 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
   Allocator* cpu_alloc_;
   BatchCache<K>* dram_cache_;
   int64 dram_capacity_;
-  std::deque<ValuePtr<V>*> dram_value_ptr_out_of_date_;
+  std::deque<void*> dram_value_ptr_out_of_date_;
   mutex memory_pool_mu_; //ensure thread safety of embedding_mem_pool_
   const int copyback_flag_offset_bits_ = 60;
 };

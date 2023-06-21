@@ -121,7 +121,7 @@ EmbeddingVariableInputLockHolder<K, V> MaybeLockEmbeddingVariableInputMutexesInO
 template<class K, class V, class Tstep>
 void LookupKeyAndSetVersion(
     OpKernelContext* ctx, EmbeddingVar<K, V>* var,
-    ValuePtr<V>** value_ptrs, Tstep gs, const K* indices,
+    void** value_ptrs, Tstep gs, const K* indices,
     int64 task_size, bool indices_as_pointer,
     int counts_index) {
   int64* indices_counts = nullptr;
@@ -138,7 +138,7 @@ void LookupKeyAndSetVersion(
   auto lookup_key_and_set_version_fn = [var, value_ptrs, gs,
       indices, indices_as_pointer,
       indices_counts, get_count_fn] (int64 start, int64 limit) {
-    ValuePtr<V>* value_ptr = nullptr;
+    void* value_ptr = nullptr;
     for (int i = start; i < limit; i++) {
       bool is_filter = false;
       int64 count = get_count_fn(indices_counts, i);
@@ -159,7 +159,7 @@ template<class K, class V>
 void LookupOrCreateEmbedding(
     OpKernelContext* ctx,
     std::vector<std::pair<EmbeddingVar<K, V>*, V**>>& vars,
-    ValuePtr<V>** value_ptrs,
+    void** value_ptrs,
     const K* indices,
     int64 num_of_keys,
     IntraThreadCopyIdAllocator* thread_copy_id_alloc) {
@@ -180,7 +180,7 @@ void GetEmbeddingPointers(
     const K* indices, Tstep gs, bool indices_as_pointer,
     int counts_index, int64 num_of_keys,
     IntraThreadCopyIdAllocator* thread_copy_id_alloc) {
-  std::vector<ValuePtr<V>*> value_ptrs(num_of_keys);
+  std::vector<void*> value_ptrs(num_of_keys);
   LookupKeyAndSetVersion(ctx, vars[0].first, value_ptrs.data(),
                          gs, indices, num_of_keys,
                          indices_as_pointer, counts_index);

@@ -30,16 +30,19 @@ template<typename K, typename V, typename EV>
 class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
  public:
   NullableFilterPolicy(const EmbeddingConfig& config,
-      EV* ev, embedding::Storage<K, V>* storage)
-       : config_(config), ev_(ev), storage_(storage) {
+      EV* ev, embedding::Storage<K, V>* storage,
+      embedding::FeatureDescriptor<V>* feat_desc)
+       : config_(config), ev_(ev),
+         storage_(storage), feat_desc_(feat_desc) {
   }
 
   Status Lookup(K key, V* val, const V* default_value_ptr,
       const V* default_value_no_permission) override {
-    ValuePtr<V>* value_ptr = nullptr;
+    void* value_ptr = nullptr;
     Status s = ev_->LookupKey(key, &value_ptr);
     if (s.ok()) {
-      V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
+      V* mem_val = feat_desc_->GetEmbedding(
+          value_ptr, config_.emb_index);
       memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
     } else {
       memcpy(val, default_value_ptr,
@@ -54,14 +57,14 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
                    int64 num_of_keys,
                    V* default_value_ptr,
                    V* default_value_no_permission) override {
-    std::vector<ValuePtr<V>*> value_ptr_list(num_of_keys, nullptr);
+    /*std::vector<void*> value_ptr_list(num_of_keys, nullptr);
     ev_->BatchLookupKey(ctx, keys, value_ptr_list.data(), num_of_keys);
     std::vector<V*> embedding_ptr(num_of_keys, nullptr);
     auto do_work = [this, keys, value_ptr_list, &embedding_ptr,
                     default_value_ptr, default_value_no_permission]
         (int64 start, int64 limit) {
       for (int i = start; i < limit; i++) {
-        ValuePtr<V>* value_ptr = value_ptr_list[i];
+        void* value_ptr = value_ptr_list[i];
         if (value_ptr != nullptr) {
           embedding_ptr[i] =
               ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
@@ -78,13 +81,13 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
     auto event_mgr = ctx.event_mgr;
     ev_->CopyEmbeddingsToBuffer(
         output, num_of_keys, embedding_ptr.data(),
-        stream, event_mgr, ctx.gpu_device);
+        stream, event_mgr, ctx.gpu_device);*/
   }
 
   void BatchLookupOrCreateKey(const EmbeddingVarContext<GPUDevice>& ctx,
-                              const K* keys, ValuePtr<V>** value_ptrs,
+                              const K* keys, void** value_ptrs,
                               int64 num_of_keys) {
-    int num_worker_threads = ctx.worker_threads->num_threads;
+    /*int num_worker_threads = ctx.worker_threads->num_threads;
     std::vector<std::list<int64>>
         not_found_cursor_list(num_worker_threads + 1);
     ev_->BatchLookupOrCreateKey(ctx, keys, value_ptrs,
@@ -107,40 +110,42 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
         keys, num_of_keys,
         not_found_cursor_list[0],
         var_ptrs.data(), ctx.compute_stream,
-        ctx.event_mgr, ctx.gpu_device);
+        ctx.event_mgr, ctx.gpu_device);*/
   }
 #endif //GOOGLE_CUDA
 
   void LookupOrCreate(K key, V* val, const V* default_value_ptr,
-                      ValuePtr<V>** value_ptr, int count,
+                      void** value_ptr, int count,
                       const V* default_value_no_permission) override {
     TF_CHECK_OK(ev_->LookupOrCreateKey(key, value_ptr));
     V* mem_val = ev_->LookupOrCreateEmb(*value_ptr, default_value_ptr);
     memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
   }
 
-  Status LookupOrCreateKey(K key, ValuePtr<V>** val,
+  Status LookupOrCreateKey(K key, void** val,
       bool* is_filter, int64 count) override {
     *is_filter = true;
     return ev_->LookupOrCreateKey(key, val);
   }
 
-  int64 GetFreq(K key, ValuePtr<V>* value_ptr) override {
-    if (storage_->GetLayoutType() != LayoutType::LIGHT) {
-      return value_ptr->GetFreq();
-    }else {
-      return 0;
-    }
+  Status LookupKey(K key, void** val,
+      bool* is_filter, int64 count) override {
+    *is_filter = true;
+    return ev_->LookupKey(key, val);
+  }
+
+  int64 GetFreq(K key, void* value_ptr) override {
+    return feat_desc_->GetFreq(value_ptr);
   }
 
   int64 GetFreq(K key) override {
-    if (storage_->GetLayoutType() != LayoutType::LIGHT) {
-      ValuePtr<V>* value_ptr = nullptr;
+    /*if (storage_->GetLayoutType() != LayoutType::LIGHT) {
+      void* value_ptr = nullptr;
       TF_CHECK_OK(ev_->LookupOrCreateKey(key, &value_ptr));
-      return value_ptr->GetFreq();
+      return feat_desc_->GetFreq(value_ptr);;
     }else {
       return 0;
-    }
+    }*/
   }
 
   Status Import(RestoreBuffer& restore_buff,
@@ -160,14 +165,14 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
         LOG(INFO) << "skip EV key:" << *(key_buff + i);
         continue;
       }
-      ValuePtr<V>* value_ptr = nullptr;
+      void* value_ptr = nullptr;
       ev_->CreateKey(key_buff[i], &value_ptr);
       if (config_.filter_freq !=0 || ev_->IsMultiLevel()
           || config_.record_freq) {
-        value_ptr->SetFreq(freq_buff[i]);
+        feat_desc_->SetFreq(value_ptr, freq_buff[i]);
       }
       if (config_.steps_to_live != 0 || config_.record_version) {
-        value_ptr->SetStep(version_buff[i]);
+        feat_desc_->UpdateVersion(value_ptr, version_buff[i]);
       }
       if (!is_filter) {
         ev_->LookupOrCreateEmb(value_ptr,
@@ -190,7 +195,7 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
                 int64 partition_num,
                 bool is_filter,
                 V* default_values) override {
-    K* key_buff = (K*)restore_buff.key_buffer;
+    /*K* key_buff = (K*)restore_buff.key_buffer;
     V* value_buff = (V*)restore_buff.value_buffer;
     int64* version_buff = (int64*)restore_buff.version_buffer;
     int64* freq_buff = (int64*)restore_buff.freq_buffer;
@@ -221,10 +226,10 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
             ev_allocator());
       }
     }
-    return Status::OK();
+    return Status::OK();*/
   }
 
-  bool is_admit(K key, ValuePtr<V>* value_ptr) override {
+  bool is_admit(K key, void* value_ptr) override {
     return true;
   }
 
@@ -232,6 +237,7 @@ class NullableFilterPolicy : public FilterPolicy<K, V, EV> {
   EmbeddingConfig config_;
   embedding::Storage<K, V>* storage_;
   EV* ev_;
+  embedding::FeatureDescriptor<V>* feat_desc_;
 };
 
 } // tensorflow

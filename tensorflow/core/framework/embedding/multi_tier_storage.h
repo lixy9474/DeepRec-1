@@ -79,7 +79,7 @@ class MultiTierStorage : public Storage<K, V> {
     return cache_;
   }
 
-  void InsertToDram(K key, ValuePtr<V>** value_ptr,
+  void InsertToDram(K key, void** value_ptr,
               int64 alloc_len) override {
     LOG(FATAL)<<"InsertToDram in MultiTierStorage shouldn't be called";
   }
@@ -92,13 +92,13 @@ class MultiTierStorage : public Storage<K, V> {
   }
 
   Status BatchCommit(const std::vector<K>& keys,
-      const std::vector<ValuePtr<V>*>& value_ptrs) override {
+      const std::vector<void*>& value_ptrs) override {
     LOG(FATAL)<<"BatchCommit isn't supported by MultiTierStorage.";
     return Status::OK();
   }
 
   Status GetSnapshot(std::vector<K>* key_list,
-      std::vector<ValuePtr<V>*>* value_ptr_list) override {
+      std::vector<void*>* value_ptr_list) override {
     LOG(FATAL)<<"Can't get snapshot of MultiTierStorage.";
   }
 
@@ -106,7 +106,7 @@ class MultiTierStorage : public Storage<K, V> {
       int total, const K* keys,
       const std::list<int64>& copyback_cursor,
       V** memcpy_address, size_t value_len,
-      ValuePtr<V> **gpu_value_ptrs,
+      void **gpu_value_ptrs,
       V* memcpy_buffer_gpu,
       se::Stream* compute_stream,
       EventMgr* event_mgr,
@@ -147,12 +147,12 @@ class MultiTierStorage : public Storage<K, V> {
   }
 
   void AllocateMemoryForNewFeatures(
-      const std::vector<ValuePtr<V>*>& value_ptr_list) override {
+      const std::vector<void*>& value_ptr_list) override {
     return;
   }
 
   void AllocateMemoryForNewFeatures(
-      ValuePtr<V>** value_ptr_list,
+      void** value_ptr_list,
       int64 num_of_value_ptrs) override {
     return;
   }
@@ -213,43 +213,43 @@ class MultiTierStorage : public Storage<K, V> {
     eviction_manager_->DeleteStorage(this);
   }
 
-  void ReleaseValuePtrs(std::deque<ValuePtr<V>*>& value_ptrs,
+  void ReleaseValuePtrs(std::deque<void*>& value_ptrs,
                         Allocator* allocator) {
-    constexpr int CAP_INVALID_VALUEPTR = 64 * 1024;
+    /*constexpr int CAP_INVALID_VALUEPTR = 64 * 1024;
     if (value_ptrs.size() > CAP_INVALID_VALUEPTR) {
       int64 num_of_deleted_value_ptrs =
           value_ptrs.size() - CAP_INVALID_VALUEPTR;
       for (int i = 0; i < num_of_deleted_value_ptrs; i++) {
-        ValuePtr<V>* value_ptr = value_ptrs.front();
+        void* value_ptr = value_ptrs.front();
         value_ptr->Destroy(allocator);
         delete value_ptr;
         value_ptrs.pop_front();
       }
-    }
+    }*/
   }
 
   void ReleaseInvalidValuePtr(Allocator* allocator) {
     ReleaseValuePtrs(value_ptr_out_of_date_, allocator);
   }
 
-  void KeepInvalidValuePtr(ValuePtr<V>* value_ptr) {
+  void KeepInvalidValuePtr(void* value_ptr) {
     value_ptr_out_of_date_.emplace_back(value_ptr);
   }
 
 #if GOOGLE_CUDA
   void CopyEmbeddingsFromDramToHbm(const EmbeddingVarContext<GPUDevice>& context,
                                    const K* keys,
-                                   ValuePtr<V>** value_ptr_list,
+                                   void** value_ptr_list,
                                    std::list<int64>& copyback_cursors,
                                    const std::vector<int64>& memory_index,
-                                   const std::vector<ValuePtr<V>*>& gpu_value_ptrs,
+                                   const std::vector<void*>& gpu_value_ptrs,
                                    int value_len);
 #endif //GOOGL_CUDA
  private:
   virtual Status EvictionWithDelayedDestroy(K* evict_ids, int64 evict_size) {}
 
  protected:
-  std::deque<ValuePtr<V>*> value_ptr_out_of_date_;
+  std::deque<void*> value_ptr_out_of_date_;
   BatchCache<K>* cache_ = nullptr;
 
   EvictionManager<K, V>* eviction_manager_;

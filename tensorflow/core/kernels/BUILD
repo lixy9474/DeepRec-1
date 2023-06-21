@@ -6447,7 +6447,7 @@ tf_kernel_library(
         "training_ali_ops_gpu.h",
         "training_ali_ops.h"
     ],
-    copts = tf_copts(),
+    copts = tf_copts() + ["-g"],
     deps = [
         ":bounds_check",
         ":training_op_helpers",
