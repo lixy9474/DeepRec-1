@@ -29,7 +29,7 @@ namespace embedding {
 template <class K, class V>
 class LocklessHashMap : public KVInterface<K, V> {
  public:
-  LocklessHashMap() {
+  LocklessHashMap(FeatureDescriptor<V>* feat_desc): feat_desc_(feat_desc) {
     hash_map_.max_load_factor(0.8);
     hash_map_.set_empty_key_and_value(
         LocklessHashMap<K, V>::EMPTY_KEY_, nullptr);
@@ -39,7 +39,7 @@ class LocklessHashMap : public KVInterface<K, V> {
 
   ~LocklessHashMap() override {}
 
-  Status Lookup(K key, ValuePtr<V>** value_ptr) override {
+  Status Lookup(K key, void** value_ptr) override {
     auto iter = hash_map_.find_wait_free(key);
     if (iter.first == LocklessHashMap<K, V>::EMPTY_KEY_) {
       return errors::NotFound(
@@ -60,10 +60,10 @@ class LocklessHashMap : public KVInterface<K, V> {
     }
   }
 
-  Status Insert(K key, const ValuePtr<V>* value_ptr) override {
+  Status Insert(K key, const void* value_ptr) override {
     auto iter = hash_map_.insert_lockless(
-        std::move(std::pair<K, ValuePtr<V>*>(key,
-            const_cast<ValuePtr<V>*>(value_ptr))));
+        std::move(std::pair<K, void*>(key,
+            const_cast<void*>(value_ptr))));
     // insert fail, exist key
     if ((*(iter.first)).second != value_ptr){
       return errors::AlreadyExists(
@@ -88,14 +88,34 @@ class LocklessHashMap : public KVInterface<K, V> {
     }
   }
 
+  Status Commit(K key, const void* value_ptr) override {
+    auto iter = hash_map_.insert_lockless(std::move(
+        std::pair<K, void*>(key,
+            const_cast<void*>(value_ptr))));
+    if ((*(iter.first)).second != value_ptr) {
+      AppendToValuePtrQueue((*(iter.first)).second);
+      (*(iter.first)).second = const_cast<void*>(value_ptr);
+    }
+    return Status::OK();
+  }
+
   Status BatchCommit(const std::vector<K>& keys,
-      const std::vector<ValuePtr<V>*>& value_ptrs) override {
+      const std::vector<void*>& value_ptrs) override {
+    for(int i = 0; i < keys.size(); ++i) {
+      auto iter = hash_map_.insert_lockless(std::move(
+          std::pair<K, void*>(keys[i],
+              const_cast<void*>(value_ptrs[i]))));
+      if ((*(iter.first)).second != value_ptrs[i]) {
+        AppendToValuePtrQueue((*(iter.first)).second);
+        (*(iter.first)).second = value_ptrs[i];
+      }
+    }
     return Status::OK();
   }
 
   Status GetSnapshot(std::vector<K>* key_list,
-      std::vector<ValuePtr<V>*>* value_ptr_list) override {
-    std::pair<const K, ValuePtr<V>*> *hash_map_dump;
+      std::vector<void*>* value_ptr_list) override {
+    std::pair<const K, void*> *hash_map_dump;
     int64 bucket_count;
     auto it = hash_map_.GetSnapshot();
     hash_map_dump = it.first;
@@ -119,12 +139,25 @@ class LocklessHashMap : public KVInterface<K, V> {
               << "map info min_load_factor:" << hash_map_.min_load_factor();
     return "";
   }
+ private:
+  void AppendToValuePtrQueue(void* old_value_ptr) {
+    //A parameter that can be adjusted in the future
+    if (value_ptr_out_of_date_.size() > CAP_INVALID_VALUEPTR) {
+      void* value_ptr = value_ptr_out_of_date_.front();
+      feat_desc_->Deallocate(value_ptr);
+      value_ptr_out_of_date_.pop_front();
+    }
+    value_ptr_out_of_date_.emplace_back(old_value_ptr);
+  }
 
  private:
-  typedef google::dense_hash_map_lockless<K, ValuePtr<V>*> LockLessHashMap;
+  typedef google::dense_hash_map_lockless<K, void*> LockLessHashMap;
   static const int EMPTY_KEY_;
   static const int DELETED_KEY_;
   LockLessHashMap hash_map_;
+  std::deque<void*> value_ptr_out_of_date_;
+  const int CAP_INVALID_VALUEPTR = 200000;
+  FeatureDescriptor<V>* feat_desc_;
 };
 template <class K, class V>
 const int LocklessHashMap<K, V>::EMPTY_KEY_ = -1;

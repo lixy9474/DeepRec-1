@@ -32,8 +32,9 @@ const static std::vector<int64> default_seeds = {
 template<typename K, typename V, typename EV>
 class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
  public:
-  BloomFilterPolicy(const EmbeddingConfig& config, EV* ev)
-      : config_(config), ev_(ev) {
+  BloomFilterPolicy(const EmbeddingConfig& config, EV* ev,
+                    embedding::FeatureDescriptor<V>* feat_desc)
+      : config_(config), ev_(ev), feat_desc_(feat_desc) {
     switch (config_.counter_type){
       case DT_UINT64:
         VLOG(2) << "The type of bloom counter is uint64";
@@ -60,7 +61,7 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
 
   Status Lookup(K key, V* val, const V* default_value_ptr,
       const V* default_value_no_permission) override {
-    ValuePtr<V>* value_ptr = nullptr;
+    void* value_ptr = nullptr;
     Status s = ev_->LookupKey(key, &value_ptr);
     if (s.ok()) {
       V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
@@ -77,14 +78,14 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
                    int64 num_of_keys,
                    V* default_value_ptr,
                    V* default_value_no_permission) override {
-    std::vector<ValuePtr<V>*> value_ptr_list(num_of_keys, nullptr);
+    std::vector<void*> value_ptr_list(num_of_keys, nullptr);
     ev_->BatchLookupKey(ctx, keys, value_ptr_list.data(), num_of_keys);
     std::vector<V*> embedding_ptr(num_of_keys, nullptr);
     auto do_work = [this, keys, value_ptr_list, &embedding_ptr,
                     default_value_ptr, default_value_no_permission]
         (int64 start, int64 limit) {
       for (int i = start; i < limit; i++) {
-        ValuePtr<V>* value_ptr = value_ptr_list[i];
+        void* value_ptr = value_ptr_list[i];
         if (value_ptr != nullptr) {
           embedding_ptr[i] =
               ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
@@ -105,13 +106,13 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
   }
 
   void BatchLookupOrCreateKey(const EmbeddingVarContext<GPUDevice>& ctx,
-                              const K* keys, ValuePtr<V>** value_ptrs_list,
+                              const K* keys, void** value_ptrs_list,
                               int64 num_of_keys) {
-    int num_worker_threads = ctx.worker_threads->num_threads;
+    /*int num_worker_threads = ctx.worker_threads->num_threads;
     std::vector<std::vector<K>> lookup_or_create_ids(num_worker_threads);
     std::vector<std::vector<int>>
         lookup_or_create_cursor(num_worker_threads);
-    std::vector<std::vector<ValuePtr<V>*>>
+    std::vector<std::vector<void*>>
         lookup_or_create_ptrs(num_worker_threads);
     IntraThreadCopyIdAllocator thread_copy_id_alloc(num_worker_threads);
     std::vector<std::list<int64>>
@@ -143,7 +144,7 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
           1000, do_work);
 
     std::vector<K> total_ids(num_of_keys);
-    std::vector<ValuePtr<V>*> total_ptrs(num_of_keys);
+    std::vector<void*> total_ptrs(num_of_keys);
     std::vector<int> total_cursors(num_of_keys);
     int num_of_admit_id = 0;
     for (int i = 0; i < num_worker_threads; i++) {
@@ -153,7 +154,7 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
                sizeof(K) * lookup_or_create_ids[i].size());
         memcpy(total_ptrs.data() + num_of_admit_id,
                lookup_or_create_ptrs[i].data(),
-               sizeof(ValuePtr<V>*) * lookup_or_create_ptrs[i].size());
+               sizeof(void*) * lookup_or_create_ptrs[i].size());
         memcpy(total_cursors.data() + num_of_admit_id,
                lookup_or_create_cursor[i].data(),
                sizeof(int) * lookup_or_create_cursor[i].size());
@@ -165,12 +166,12 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
                                 num_of_keys, not_found_cursor_list);
     for (int i = 0; i < total_ptrs.size(); i++) {
       value_ptrs_list[total_cursors[i]] = total_ptrs[i];
-    }
+    }*/
   }
 #endif //GOOGLE_CUDA
 
   void LookupOrCreate(K key, V* val, const V* default_value_ptr,
-                      ValuePtr<V>** value_ptr, int count,
+                      void** value_ptr, int count,
                       const V* default_value_no_permission) override {
     if (GetBloomFreq(key) >= config_.filter_freq) {
       TF_CHECK_OK(ev_->LookupOrCreateKey(key, value_ptr));
@@ -182,7 +183,7 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
     }
   }
 
-  Status LookupOrCreateKey(K key, ValuePtr<V>** val,
+  Status LookupOrCreateKey(K key, void** val,
       bool* is_filter, int64 count) override {
     *val = nullptr;
     if ((GetFreq(key, *val) + count) >= config_.filter_freq) {
@@ -194,7 +195,7 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
     return Status::OK();
   }
 
-  int64 GetFreq(K key, ValuePtr<V>*) override {
+  int64 GetFreq(K key, void*) override {
     return GetBloomFreq(key);
   }
 
@@ -206,7 +207,7 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
     return bloom_counter_;
   }
 
-  bool is_admit(K key, ValuePtr<V>* value_ptr) override {
+  bool is_admit(K key, void* value_ptr) override {
     if (value_ptr == nullptr) {
       return false;
     } else {
@@ -320,7 +321,7 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
         LOG(INFO) << "skip EV key:" << *(key_buff + i);
         continue;
       }
-      ValuePtr<V>* value_ptr = nullptr;
+      void* value_ptr = nullptr;
       int64 new_freq = freq_buff[i];
       if (!is_filter) {
         if (freq_buff[i] >= config_.filter_freq) {
@@ -335,7 +336,7 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
       if (new_freq >= config_.filter_freq){
         ev_->CreateKey(key_buff[i], &value_ptr);
         if (config_.steps_to_live != 0 || config_.record_version) {
-          value_ptr->SetStep(version_buff[i]);
+          feat_desc_->UpdateVersion(value_ptr, version_buff[i]);
         }
         if (!is_filter){
           ev_->LookupOrCreateEmb(value_ptr,
@@ -460,6 +461,7 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
   void* bloom_counter_;
   EmbeddingConfig config_;
   EV* ev_;
+  embedding::FeatureDescriptor<V>* feat_desc_;
   std::vector<int64> seeds_;
 };
 } // tensorflow

@@ -17,6 +17,7 @@ limitations under the License.
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_FILTER_POLICY_H_
 
 #include "tensorflow/core/framework/embedding/embedding_config.h"
+#include "tensorflow/core/framework/embedding/feature_descriptor.h"
 
 namespace tensorflow {
 
@@ -38,7 +39,7 @@ template<typename K, typename V, typename EV>
 class FilterPolicy {
  public:
   virtual void LookupOrCreate(K key, V* val,
-      const V* default_value_ptr, ValuePtr<V>** value_ptr,
+      const V* default_value_ptr, void** value_ptr,
       int count, const V* default_value_no_permission) = 0;
 
   virtual Status Lookup(K key, V* val, const V* default_value_ptr,
@@ -53,14 +54,17 @@ class FilterPolicy {
 
   virtual void BatchLookupOrCreateKey(
       const EmbeddingVarContext<GPUDevice>& ctx,
-      const K* keys, ValuePtr<V>** value_ptrs_list,
+      const K* keys, void** value_ptrs_list,
       int64 num_of_keys) = 0;
 #endif //GOOGLE_CUDA
 
-  virtual Status LookupOrCreateKey(K key, ValuePtr<V>** val,
+  virtual Status LookupOrCreateKey(K key, void** val,
       bool* is_filter, int64 count) = 0;
+  
+  virtual Status LookupKey(K key, void** val,
+      bool* is_filter, int64 count) {}
 
-  virtual int64 GetFreq(K key, ValuePtr<V>* value_ptr) = 0;
+  virtual int64 GetFreq(K key, void* value_ptr) = 0;
   virtual int64 GetFreq(K key) = 0;
   virtual Status Import(RestoreBuffer& restore_buff,
     int64 key_num,
@@ -76,7 +80,7 @@ class FilterPolicy {
                 bool is_filter,
                 V* default_values) = 0;
 
-  virtual bool is_admit(K key, ValuePtr<V>* value_ptr) = 0;
+  virtual bool is_admit(K key, void* value_ptr) = 0;
 };
 } // tensorflow
 

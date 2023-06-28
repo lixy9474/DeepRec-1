@@ -1629,6 +1629,7 @@ class VariableScope(object):
         dtype = self._dtype
       if invalid_key is None:
         invalid_key = -1
+        print(type(invalid_key))
       return var_store.get_variable(
           full_name, shape=shape, dtype=dtype, initializer=initializer,
           regularizer=regularizer, reuse=reuse, trainable=trainable,

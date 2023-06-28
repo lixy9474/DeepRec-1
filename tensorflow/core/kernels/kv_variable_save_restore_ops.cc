@@ -175,19 +175,25 @@ class KvResourceImportV2Op: public AsyncOpKernel {
                 counter_type_, default_value_dim_,
                 default_value_no_permission_,
                 record_freq_, record_version_);
+            Allocator* alloc_for_ev =
+                (device_type_str_ == "CPU") ? ev_allocator() : allocator;
+            auto feat_desc = embedding::FeatureDescriptorFactory::Create<TValue>(
+                embedding_config, alloc_for_ev, storage_type_);
             auto storage =
                 embedding::StorageFactory::Create<TKey, TValue>(
                     embedding::StorageConfig(
                         storage_type_, storage_path_,
                         storage_size_, layout_,
                         embedding_config),
-                    allocator,
+                    alloc_for_ev,
+                    feat_desc,
                     handle_self.name());
             *ptr = new EmbeddingVar<TKey, TValue>(
                 handle_self.name(),
                 storage,
                 embedding_config,
-                allocator);
+                alloc_for_ev,
+                feat_desc);
             return Status::OK();
         }));
       ev->Init(default_values, default_value_dim_);
@@ -210,16 +216,21 @@ class KvResourceImportV2Op: public AsyncOpKernel {
                 layout_,  max_element_size_,
                 false_positive_probability_,
                 counter_type_, 0, record_freq_, record_version_);
+            Allocator* alloc_for_ev =
+                (device_type_str_ == "CPU") ? ev_allocator() : allocator;
+            auto feat_desc = embedding::FeatureDescriptorFactory::Create<TValue>(
+                embedding_config, alloc_for_ev, storage_type_);
             auto storage =
                 embedding::StorageFactory::Create<TKey, TValue>(
                     embedding::StorageConfig(
                         storage_type_, storage_path_,
                         storage_size_, layout_,
                         embedding_config),
-                    allocator,
+                    alloc_for_ev,
+                    feat_desc,
                     handle_primary.name());
             *ptr = new EmbeddingVar<TKey, TValue>(handle_primary.name(),
-                storage, embedding_config, allocator);
+                storage, embedding_config, alloc_for_ev, feat_desc);
             // default_values is slot value, should not to initialize primary value
             return Status::OK();
           }));
@@ -232,17 +243,22 @@ class KvResourceImportV2Op: public AsyncOpKernel {
                handle_self, context](EmbeddingVar<TKey, TValue>** ptr) {
             Allocator* allocator =
                 context->device()->GetAllocator(AllocatorAttributes());
+            auto embedding_config = EmbeddingConfig(
+                emb_index_ + block_num_ * slot_index_,
+                emb_index_, block_num_, slot_num_, opname,
+                steps_to_live_, filter_freq_, max_freq_,
+                l2_weight_threshold_, layout_, max_element_size_,
+                false_positive_probability_,
+                counter_type_, default_value_dim_,
+                default_value_no_permission_,
+                record_freq_, record_version_);
+            Allocator* alloc_for_ev =
+                (device_type_str_ == "CPU") ? ev_allocator() : allocator;
             *ptr = new EmbeddingVar<TKey, TValue>(handle_self.name(),
                 primary_variable->storage(),
-                EmbeddingConfig(emb_index_ + block_num_ * slot_index_,
-                    emb_index_, block_num_, slot_num_, opname,
-                    steps_to_live_, filter_freq_, max_freq_,
-                    l2_weight_threshold_, layout_, max_element_size_,
-                    false_positive_probability_,
-                    counter_type_, default_value_dim_,
-                    default_value_no_permission_,
-                    record_freq_, record_version_),
-                    allocator);
+                embedding_config,
+                alloc_for_ev,
+                primary_variable->feature_descriptor());
             return (*ptr)->Init(default_values, default_value_dim_);
           }));
       core::ScopedUnref unref_me(primary_variable);
@@ -303,6 +319,7 @@ class KvResourceImportV2Op: public AsyncOpKernel {
   bool record_version_;
   bool reset_version_;
   bool ev_async_restore_;
+  std::string device_type_str_;
 };
 
 #define REGISTER_KERNELS(dev, ktype, vtype)                    \
