@@ -31,11 +31,12 @@ namespace embedding {
 template<typename K, typename V>
 class DramSsdHashStorage : public MultiTierStorage<K, V> {
  public:
-  DramSsdHashStorage(const StorageConfig& sc, Allocator* alloc,
-      LayoutCreator<V>* lc, const std::string& name)
-      : MultiTierStorage<K, V>(sc, name) {
-    dram_= new DramStorage<K, V>(sc, alloc, lc, new LocklessHashMap<K, V>());
-    ssd_hash_ = new SsdHashStorage<K, V>(sc, alloc, lc);
+  DramSsdHashStorage(const StorageConfig& sc,
+      FeatureDescriptor<V>* feat_desc, const std::string& name)
+      : dram_feat_desc_(feat_desc),
+        MultiTierStorage<K, V>(sc, name) {
+    dram_= new DramStorage<K, V>(sc, feat_desc);
+    ssd_hash_ = new SsdHashStorage<K, V>(sc, feat_desc);
   }
 
   ~DramSsdHashStorage() override {
@@ -46,7 +47,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
 
   TF_DISALLOW_COPY_AND_ASSIGN(DramSsdHashStorage);
 
-  Status Get(K key, ValuePtr<V>** value_ptr) override {
+  Status Get(K key, void** value_ptr) override {
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
       return s;
@@ -64,23 +65,16 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
     return s;
   }
 
-  void Insert(K key, ValuePtr<V>* value_ptr) override {
-    LOG(FATAL)<<"Unsupport Insert(K, ValuePtr<V>*) in DramSsdHashStorage.";
+  void Insert(K key, void** value_ptr) override {
+    dram_->Insert(key, value_ptr);
   }
 
-  void Insert(K key, ValuePtr<V>** value_ptr,
+  void Insert(K key, void** value_ptr,
               size_t alloc_len) override {
     dram_->Insert(key, value_ptr, alloc_len);
   }
 
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
-      size_t size, CopyBackFlag &need_copyback) override {
-    LOG(FATAL)<<"GetOrCreate(K key, ValuePtr<V>** value_ptr, "
-              <<"size_t size, CopyBackFlag &need_copyback) "
-              <<"in DramSsdStorage can not be called.";
-  }
-
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
+  Status GetOrCreate(K key, void** value_ptr,
       size_t size) override {
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
@@ -183,7 +177,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   }
 
   Status Eviction(K* evict_ids, int64 evict_size) override {
-    ValuePtr<V>* value_ptr = nullptr;
+    void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {
         TF_CHECK_OK(ssd_hash_->Commit(evict_ids[i], value_ptr));
@@ -197,8 +191,8 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   Status EvictionWithDelayedDestroy(K* evict_ids, int64 evict_size) override {
     mutex_lock l(*(dram_->get_mutex()));
     mutex_lock l1(*(ssd_hash_->get_mutex()));
-    MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->alloc_);
-    ValuePtr<V>* value_ptr = nullptr;
+    MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->feature_descriptor());
+    void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {
         TF_CHECK_OK(ssd_hash_->Commit(evict_ids[i], value_ptr));
@@ -209,14 +203,25 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
     return Status::OK();
   }
 
+  void UpdateValuePtr(K key, void* new_value_ptr,
+                      void* old_value_ptr) override {
+    dram_->UpdateValuePtr(key, new_value_ptr, old_value_ptr);
+  }
+
+  void Init() override {
+    ssd_hash_->Init();
+    MultiTierStorage<K, V>::Init();
+  }
+
  protected:
-  void SetTotalDims(int64 total_dims) override {
-    ssd_hash_->SetTotalDims(total_dims);
+  int total_dim() override {
+    return dram_feat_desc_->total_dim();
   }
 
  private:
   DramStorage<K, V>* dram_ = nullptr;
   SsdHashStorage<K, V>* ssd_hash_ = nullptr;
+  FeatureDescriptor<V>* dram_feat_desc_;
 };
 } // embedding
 } // tensorflow

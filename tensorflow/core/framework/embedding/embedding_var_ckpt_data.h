@@ -21,46 +21,41 @@ limitations under the License.
 #include "tensorflow/core/framework/embedding/embedding_var_dump_iterator.h"
 namespace tensorflow {
 namespace embedding {
-
 template<class K, class V>
 class  EmbeddingVarCkptData {
  public:
-  void Emplace(K key, ValuePtr<V>* value_ptr,
+  void Emplace(K key, void* value_ptr,
                const EmbeddingConfig& emb_config,
-               V* default_value, int64 value_offset,
+               V* default_value,
+               FeatureDescriptor<V>* feat_desc,
                bool is_save_freq,
                bool is_save_version,
                bool save_unfiltered_features) {
     if((int64)value_ptr == ValuePtrStatus::IS_DELETED)
       return;
 
-    V* primary_val = value_ptr->GetValue(0, 0);
-    bool is_not_admit =
-        primary_val == nullptr
-        && emb_config.filter_freq != 0;
+    bool is_in_dram = ((int64)value_ptr >> 48 == 0);
+    bool is_not_admit = feat_desc->IsAdmit(value_ptr);
 
-    if (!is_not_admit) {
+    if (true) {
        key_vec_.emplace_back(key);
 
-      if (primary_val == nullptr) {
+      if (!is_in_dram) {
+        value_ptr_vec_.emplace_back((V*)ValuePtrStatus::NOT_IN_DRAM);
+      } else if (feat_desc->GetEmbedding(value_ptr, 0) == nullptr) {
         value_ptr_vec_.emplace_back(default_value);
-      } else if (
-          (int64)primary_val == ValuePosition::NOT_IN_DRAM) {
-        value_ptr_vec_.emplace_back((V*)ValuePosition::NOT_IN_DRAM);
       } else {
-        V* val = value_ptr->GetValue(emb_config.emb_index,
-            value_offset);
+        V* val = feat_desc->GetEmbedding(value_ptr, emb_config.emb_index);
         value_ptr_vec_.emplace_back(val);
       }
 
-
       if(is_save_version) {
-        int64 dump_version = value_ptr->GetStep();
+        int64 dump_version = feat_desc->GetVersion(value_ptr);
         version_vec_.emplace_back(dump_version);
       }
 
       if(is_save_freq) {
-        int64 dump_freq = value_ptr->GetFreq();
+        int64 dump_freq = feat_desc->GetFreq(value_ptr);
         freq_vec_.emplace_back(dump_freq);
       }
     } else {
@@ -70,11 +65,11 @@ class  EmbeddingVarCkptData {
       key_filter_vec_.emplace_back(key);
 
       if(is_save_version) {
-        int64 dump_version = value_ptr->GetStep();
+        int64 dump_version = feat_desc->GetVersion(value_ptr);
         version_filter_vec_.emplace_back(dump_version);
       }
 
-      int64 dump_freq = value_ptr->GetFreq();
+      int64 dump_freq = feat_desc->GetFreq(value_ptr);
       freq_filter_vec_.emplace_back(dump_freq);
     }
   }

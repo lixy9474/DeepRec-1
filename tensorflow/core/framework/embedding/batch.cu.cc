@@ -84,6 +84,9 @@ __global__ void SparseApplyAdagradGPU(V** a, V** v, const V* g, V lr,
   int item_pos = i % embedding_dim;
 
   if (i < limit * embedding_dim) {
+    if(i == 0) {
+      printf("v: %f, a:%f, g:%f\n",  *(v[item_id] + item_pos), *(a[item_id] + item_pos), g[i]);
+    }
     *(a[item_id] + item_pos) += g[i] * g[i];
     *(v[item_id] + item_pos) -=
         lr * g[i] * rsqrt(*(a[item_id] + item_pos));

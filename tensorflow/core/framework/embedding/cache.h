@@ -345,6 +345,7 @@ class LFUCache : public BatchCache<K> {
     auto lock = BatchCache<K>::maybe_lock_cache(mu_, temp_mu, use_locking);
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
+      LOG(INFO)<<"add_to_cache: "<<id;
       auto it = key_table.find(id);
       if (it == key_table.end()) {
         freq_table[0].first->emplace_front(LFUNode(id, 1));
@@ -383,6 +384,7 @@ class LFUCache : public BatchCache<K> {
     auto lock = BatchCache<K>::maybe_lock_cache(mu_, temp_mu, use_locking);
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
+      LOG(INFO)<<"add_to_cache: "<<id;
       auto it = key_table.find(id);
       size_t freq =  batch_freqs[i];
       if (it == key_table.end()) {

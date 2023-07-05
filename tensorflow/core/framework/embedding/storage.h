@@ -59,43 +59,43 @@ template<typename K, typename V>
 class Storage {
  public:
   explicit Storage(const StorageConfig& storage_config)
-      : storage_config_(storage_config) {}
+      : storage_config_(storage_config) {
+    initialize_value_.resize(storage_config.embedding_config.slot_num + 1);    
+  }
   virtual ~Storage() {}
   TF_DISALLOW_COPY_AND_ASSIGN(Storage);
 
-  virtual Status Get(K key, ValuePtr<V>** value_ptr) = 0;
+  virtual Status Get(K key, void** value_ptr) = 0;
 #if GOOGLE_CUDA
   virtual void BatchGet(const EmbeddingVarContext<GPUDevice>& ctx,
                         const K* key,
-                        ValuePtr<V>** value_ptr_list,
+                        void** value_ptr_list,
                         int64 num_of_keys,
                         int64 value_len) {}
 
   virtual void BatchGetOrCreate(
       const EmbeddingVarContext<GPUDevice>& ctx,
       const K* key,
-      ValuePtr<V>** value_ptr_list,
+      void** value_ptr_list,
       int64 num_of_keys,
       int64 value_len,
       std::vector<std::list<int64>>& not_found_cursor_list) {}
 #endif //GOOGLE_CUDA
   virtual Status Contains(K key) = 0;
-  virtual void Insert(K key, ValuePtr<V>** value_ptr, size_t alloc_len) = 0;
-  virtual void InsertToDram(K key, ValuePtr<V>** value_ptr,
+  virtual void Insert(K key, void** value_ptr, size_t alloc_len) = 0;
+  virtual void InsertToDram(K key, void** value_ptr,
                             int64 alloc_len) = 0;
-  virtual void Insert(K key, ValuePtr<V>* value_ptr) = 0;
-  virtual void SetAllocLen(int64 value_len, int slot_num) = 0;
+  virtual void Insert(K key, void** value_ptr) = 0;
+  virtual void Init() {}
   virtual void SetValueLen(int64 value_len) {}
-  virtual Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
+  virtual Status GetOrCreate(K key, void** value_ptr,
       size_t size) = 0;
-  virtual Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
-      size_t size, CopyBackFlag &need_copyback) = 0;
   virtual int LookupTier(K key) const = 0;
   virtual Status Remove(K key) = 0;
   virtual int64 Size() const = 0;
   virtual int64 Size(int level) const = 0;
   virtual Status GetSnapshot(std::vector<K>* key_list,
-      std::vector<ValuePtr<V>*>* value_ptr_list) = 0;
+      std::vector<void*>* value_ptr_list) = 0;
   virtual Status Save(
       const string& tensor_name,
       const string& prefix,
@@ -112,7 +112,7 @@ class Storage {
       const std::string& ssd_emb_file_name) = 0;
 
   virtual Status BatchCommit(const std::vector<K>& keys,
-      const std::vector<ValuePtr<V>*>& value_ptrs) = 0;
+      const std::vector<void*>& value_ptrs) = 0;
 
   virtual Status Eviction(K* evict_ids, int64 evict_size) = 0;
 
@@ -120,7 +120,7 @@ class Storage {
       int total, const K* keys,
       const std::list<int64>& copyback_cursor,
       V** memcpy_address, size_t value_len,
-      ValuePtr<V> **gpu_value_ptrs,
+      void **gpu_value_ptrs,
       V* memcpy_buffer_gpu,
       se::Stream* compute_stream,
       EventMgr* event_mgr,
@@ -153,10 +153,6 @@ class Storage {
       Allocator* alloc,
       int64 value_len,
       int64 block_size) = 0;
-  virtual void AllocateMemoryForNewFeatures(
-      const std::vector<ValuePtr<V>*>& value_ptr_list) = 0;
-  virtual void AllocateMemoryForNewFeatures(
-      ValuePtr<V>** value_ptr_list, int64 num_of_value_ptrs) = 0;
   virtual void ImportToHbm(K* ids, int64 size, int64 value_len,
                            int64 emb_index) = 0;
  
@@ -189,7 +185,7 @@ class Storage {
   }
 
   inline void Insert(const std::vector<K>& keys,
-                     ValuePtr<V>** value_ptrs) {
+                     void** value_ptrs) {
     for (size_t i = 0; i < keys.size(); i++) {
       Insert(keys[i], value_ptrs[i]);
     }
@@ -204,13 +200,17 @@ class Storage {
 
   virtual void AddToCache(const Tensor& indices) {}
 
+  virtual void UpdateValuePtr(K key, void* new_value_ptr,
+                              void* old_value_ptr) = 0;
+
  private:
   void GeneratePartitionedCkptData(
       const std::vector<K>& key_list,
-      const std::vector<ValuePtr<V>*>& value_ptr_list,
+      const std::vector<void*>& value_ptr_list,
       EmbeddingVarCkptData<K, V>* partitioned_ckpt_data,
       const EmbeddingConfig& emb_config,
-      V* default_value) {
+      V* default_value,
+      FeatureDescriptor<V>* feat_desc) {
     std::vector<EmbeddingVarCkptData<K, V>>
         ev_ckpt_data_parts(kSavedPartitionNum);
 
@@ -227,7 +227,43 @@ class Storage {
           ev_ckpt_data_parts[part_id].Emplace(
               key_list[i], value_ptr_list[i],
               emb_config, default_value,
-              GetOffset(emb_config.emb_index),
+              feat_desc,
+              is_save_freq,
+              is_save_version,
+              save_unfiltered_features);
+          break;
+        }
+      }
+    }
+
+    partitioned_ckpt_data->SetWithPartition(ev_ckpt_data_parts);
+  }
+
+  void GeneratePartitionedCkptData(
+      const std::vector<K>& key_list,
+      const std::vector<void*>& value_ptr_list,
+      EmbeddingVarCkptData<K, V>* partitioned_ckpt_data,
+      const EmbeddingConfig& emb_config,
+      V* default_value,
+      const std::vector<FeatureDescriptor<V>*>& feat_desc) {
+    std::vector<EmbeddingVarCkptData<K, V>>
+        ev_ckpt_data_parts(kSavedPartitionNum);
+
+    bool save_unfiltered_features = true;
+    TF_CHECK_OK(ReadBoolFromEnvVar(
+        "TF_EV_SAVE_FILTERED_FEATURES", true, &save_unfiltered_features));
+
+    bool is_save_freq = emb_config.is_save_freq();
+    bool is_save_version = emb_config.is_save_version();
+
+    for (int64 i = 0; i < key_list.size(); i++) {
+      for (int part_id = 0; part_id < kSavedPartitionNum; part_id++) {
+        if (key_list[i] % kSavedPartitionNum == part_id) {
+          int feat_desc_type = (int64)value_ptr_list[i] >> 48;
+          ev_ckpt_data_parts[part_id].Emplace(
+              key_list[i], value_ptr_list[i],
+              emb_config, default_value,
+              feat_desc[feat_desc_type],
               is_save_freq,
               is_save_version,
               save_unfiltered_features);
@@ -267,12 +303,33 @@ class Storage {
       int64 value_len,
       V* default_value,
       const std::vector<K>& key_list,
-      const std::vector<ValuePtr<V>*>& value_ptr_list,
+      const std::vector<void*>& value_ptr_list,
+      FeatureDescriptor<V>* feat_desc,
       ValueIterator<V>* value_iter = nullptr) {
     EmbeddingVarCkptData<K, V> partitioned_ckpt_data;
     GeneratePartitionedCkptData(key_list, value_ptr_list,
                                 &partitioned_ckpt_data, emb_config,
-                                default_value);
+                                default_value, feat_desc);
+    Status s =
+        partitioned_ckpt_data.ExportToCkpt(
+            tensor_name, writer, value_len, value_iter);
+    return Status::OK();
+  }
+
+  Status SaveToCheckpoint(
+      const string& tensor_name,
+      BundleWriter* writer,
+      const EmbeddingConfig& emb_config,
+      int64 value_len,
+      V* default_value,
+      const std::vector<K>& key_list,
+      const std::vector<void*>& value_ptr_list,
+      const std::vector<FeatureDescriptor<V>*>& feat_desc,
+      ValueIterator<V>* value_iter = nullptr) {
+    EmbeddingVarCkptData<K, V> partitioned_ckpt_data;
+    GeneratePartitionedCkptData(key_list, value_ptr_list,
+                                &partitioned_ckpt_data, emb_config,
+                                default_value, feat_desc);
     Status s =
         partitioned_ckpt_data.ExportToCkpt(
             tensor_name, writer, value_len, value_iter);
@@ -300,6 +357,7 @@ class Storage {
 
   mutex mu_;
   std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
+  std::vector<V*> initialize_value_;
 };
 } // embedding
 } // tensorflow

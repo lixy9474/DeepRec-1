@@ -62,24 +62,22 @@ class HbmDramSsdStorage;
 template<typename K, typename V>
 class SingleTierStorage : public Storage<K, V> {
  public:
-  SingleTierStorage(const StorageConfig& sc, Allocator* alloc,
-      KVInterface<K, V>* kv, LayoutCreator<V>* lc)
-      : kv_(kv), alloc_(alloc), layout_creator_(lc),
+  SingleTierStorage(const StorageConfig& sc,
+      KVInterface<K, V>* kv, FeatureDescriptor<V>* feat_desc)
+      : kv_(kv), feat_desc_(feat_desc),
         Storage<K, V>(sc) {
     if (sc.embedding_config.steps_to_live != 0) {
       shrink_policy_ =
           new GlobalStepShrinkPolicy<K, V>(
               sc.embedding_config.steps_to_live,
-              alloc_,
+              feat_desc_,
               kv_);
     } else if (sc.embedding_config.l2_weight_threshold != -1.0) {
       shrink_policy_ =
           new L2WeightShrinkPolicy<K, V>(
               sc.embedding_config.l2_weight_threshold,
               sc.embedding_config.primary_emb_index,
-              Storage<K, V>::GetOffset(
-                  sc.embedding_config.primary_emb_index),
-              alloc_,
+              feat_desc_,
               kv_);
     } else {
       shrink_policy_ = new NonShrinkPolicy<K, V>();
@@ -89,11 +87,10 @@ class SingleTierStorage : public Storage<K, V> {
   ~SingleTierStorage() override {
     mutex_lock l(Storage<K, V>::mu_);
     std::vector<K> key_list;
-    std::vector<ValuePtr<V>*> value_ptr_list;
+    std::vector<void*> value_ptr_list;
     kv_->GetSnapshot(&key_list, &value_ptr_list);
     for (auto value_ptr : value_ptr_list) {
-      value_ptr->Destroy(alloc_);
-      delete value_ptr;
+      feat_desc_->Deallocate(value_ptr);
     }
     delete kv_;
     delete shrink_policy_;
@@ -101,7 +98,7 @@ class SingleTierStorage : public Storage<K, V> {
 
   TF_DISALLOW_COPY_AND_ASSIGN(SingleTierStorage);
 
-  Status Get(K key, ValuePtr<V>** value_ptr) override {
+  Status Get(K key, void** value_ptr) override {
     return kv_->Lookup(key, value_ptr);
   }
 
@@ -109,51 +106,50 @@ class SingleTierStorage : public Storage<K, V> {
     return kv_->Contains(key);
   }
 
-  virtual void Insert(K key, ValuePtr<V>** value_ptr,
+  virtual void Insert(K key, void** value_ptr,
               size_t alloc_len) override {
     do {
-      *value_ptr = layout_creator_->Create(alloc_, alloc_len);
+      *value_ptr = feat_desc_->Allocate();
       Status s = kv_->Insert(key, *value_ptr);
       if (s.ok()) {
         break;
       } else {
-        (*value_ptr)->Destroy(alloc_);
-        delete *value_ptr;
+        feat_desc_->Deallocate(*value_ptr);
       }
     } while (!(kv_->Lookup(key, value_ptr)).ok());
   }
 
-  virtual void Insert(K key, ValuePtr<V>* value_ptr) override {
-    LOG(FATAL)<<"Unsupport Insert(K, ValuePtr<V>*) in SingleTireStorage.";
+  virtual void Insert(K key, void** value_ptr) override {
+    do {
+      Status s = kv_->Insert(key, *value_ptr);
+      if (s.ok()) {
+        break;
+      } else {
+        feat_desc_->Deallocate(*value_ptr);
+      }
+    } while (!(kv_->Lookup(key, value_ptr)).ok());
   }
 
-  void InsertToDram(K key, ValuePtr<V>** value_ptr,
+  void InsertToDram(K key, void** value_ptr,
               int64 alloc_len) override {
     LOG(FATAL)<<"InsertToDram in SingleTierStorage shouldn't be called";
   }
 
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
+  Status GetOrCreate(K key, void** value_ptr,
       size_t size) override {
     Status s = kv_->Lookup(key, value_ptr);
     if (s.ok()) {
       return s;
     }
 
-    *value_ptr = layout_creator_->Create(alloc_, size);
+    *value_ptr = feat_desc_->Allocate();
     s = kv_->Insert(key, *value_ptr);
     if (s.ok()) {
       return s;
     }
     // Insert Failed, key already exist
-    (*value_ptr)->Destroy(alloc_);
-    delete *value_ptr;
+    feat_desc_->Deallocate(*value_ptr);
     return kv_->Lookup(key, value_ptr);
-  }
-
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
-      size_t size, CopyBackFlag &need_copyback) override {
-    need_copyback = NOT_COPYBACK;
-    return GetOrCreate(key, value_ptr, size);
   }
  
   Status Remove(K key) override {
@@ -185,7 +181,7 @@ class SingleTierStorage : public Storage<K, V> {
       int total, const K* keys,
       const std::list<int64>& copyback_cursor,
       V** memcpy_address, size_t value_len,
-      ValuePtr<V> **gpu_value_ptrs,
+      void **gpu_value_ptrs,
       V* memcpy_buffer_gpu,
       se::Stream* compute_stream,
       EventMgr* event_mgr,
@@ -203,13 +199,13 @@ class SingleTierStorage : public Storage<K, V> {
   }
 
   virtual Status BatchCommit(const std::vector<K>& keys,
-      const std::vector<ValuePtr<V>*>& value_ptrs) override {
+      const std::vector<void*>& value_ptrs) override {
     LOG(FATAL) << "Unsupport BatchCommit in Storage: "
                << typeid(this).name();
     return Status::OK();
   }
 
-  virtual Status Commit(K keys, const ValuePtr<V>* value_ptr) {
+  virtual Status Commit(K keys, const void* value_ptr) {
      LOG(FATAL) << "Unsupport Commit in Storage: "
                 << typeid(this).name();
     return Status::OK();
@@ -227,19 +223,8 @@ class SingleTierStorage : public Storage<K, V> {
     return;
   }
 
-  void AllocateMemoryForNewFeatures(
-      const std::vector<ValuePtr<V>*>& value_ptr_list) override {
-    return;
-  }
-
-  void AllocateMemoryForNewFeatures(
-      ValuePtr<V>** value_ptr_list,
-      int64 num_of_value_ptrs) override {
-    return;
-  }
-
   Status GetSnapshot(std::vector<K>* key_list,
-      std::vector<ValuePtr<V>*>* value_ptr_list) override {
+      std::vector<void*>* value_ptr_list) override {
     mutex_lock l(Storage<K, V>::mu_);
     return kv_->GetSnapshot(key_list, value_ptr_list);
   }
@@ -252,7 +237,7 @@ class SingleTierStorage : public Storage<K, V> {
       ShrinkArgs& shrink_args,
       int64 value_len,
       V* default_value) override {
-    std::vector<ValuePtr<V>*> value_ptr_list;
+    std::vector<void*> value_ptr_list;
     std::vector<K> key_list_tmp;
     TF_CHECK_OK(kv_->GetSnapshot(
         &key_list_tmp, &value_ptr_list));
@@ -260,13 +245,13 @@ class SingleTierStorage : public Storage<K, V> {
     if (emb_config.is_primary()) {
       Shrink(key_list_tmp, value_ptr_list, shrink_args, value_len);
     }
-
     TF_CHECK_OK((Storage<K, V>::SaveToCheckpoint(
         tensor_name, writer,
         emb_config,
         value_len, default_value,
         key_list_tmp,
-        value_ptr_list)));
+        value_ptr_list,
+        SingleTierStorage<K, V>::feat_desc_)));
     return Status::OK();
   }
 
@@ -282,20 +267,6 @@ class SingleTierStorage : public Storage<K, V> {
   virtual void ImportToHbm (
       K* ids, int64 size, int64 value_len, int64 emb_index) override {
     LOG(FATAL)<<"This Storage dosen't have a HBM storage.";
-  }
-
-  void SetAllocLen(int64 value_len, int slot_num) override {
-    while (Storage<K, V>::flag_.test_and_set(std::memory_order_acquire));
-    // The start address of every slot should be aligned to 16 bytes,
-    // otherwise a coredump will happen in the ApplyOp.
-    Storage<K, V>::alloc_len_ = Storage<K, V>::ComputeAllocLen(value_len);
-
-    int64 temp = Storage<K, V>::alloc_len_ * slot_num;
-    if (temp > Storage<K, V>::total_dims_) {
-      Storage<K, V>::total_dims_ = temp;
-      SetTotalDims(Storage<K, V>::total_dims_);
-    }
-    Storage<K, V>::flag_.clear(std::memory_order_release);
   }
 
   bool IsMultiLevel() override {
@@ -318,20 +289,26 @@ class SingleTierStorage : public Storage<K, V> {
     LOG(FATAL) << "Unsupport Schedule in SingleTierStorage.";
   }
 
- protected:
-  virtual void SetTotalDims(int64 total_dims) = 0;
-
-  virtual ValuePtr<V>* CreateValuePtr(int64 size) {
-    return layout_creator_->Create(alloc_, size);
+  void UpdateValuePtr(K key, void* new_value_ptr,
+                      void* old_value_ptr) override {
+    kv_->UpdateValuePtr(key, new_value_ptr, old_value_ptr);
   }
 
-  virtual void DestroyValuePtr(ValuePtr<V>* value_ptr) {
-    value_ptr->Destroy(alloc_);
-    delete value_ptr;
+ protected:
+  virtual void* CreateValuePtr() {
+    return feat_desc_->Allocate();
+  }
+
+  virtual void DestroyValuePtr(void* value_ptr) {
+    feat_desc_->Deallocate(value_ptr);
+  }
+
+  FeatureDescriptor<V>* feature_descriptor() {
+    return feat_desc_;
   }
  protected:
   virtual void Shrink(std::vector<K>& key_list,
-                      std::vector<ValuePtr<V>*>& value_ptr_list,
+                      std::vector<void*>& value_ptr_list,
                       ShrinkArgs& shrink_args,
                       int64 value_len) {
     mutex_lock l(Storage<K, V>::mu_);
@@ -347,28 +324,28 @@ class SingleTierStorage : public Storage<K, V> {
   ShrinkPolicy<K, V>* shrink_policy_;
   Allocator* alloc_;
   LayoutCreator<V>* layout_creator_;
+  FeatureDescriptor<V>* feat_desc_;
 };
 
 template<typename K, typename V>
 class DramStorage : public SingleTierStorage<K, V> {
  public:
-  DramStorage(const StorageConfig& sc, Allocator* alloc,
-      LayoutCreator<V>* lc,
-      KVInterface<K, V>* kv)
-      : SingleTierStorage<K, V>(sc, alloc, kv, lc) {}
+  DramStorage(const StorageConfig& sc,
+      FeatureDescriptor<V>* feat_desc)
+      : SingleTierStorage<K, V>(sc, new LocklessHashMap<K, V>(feat_desc), feat_desc) {}
 
   ~DramStorage() override {}
 
   Status BatchCommit(const std::vector<K>& keys,
-      const std::vector<ValuePtr<V>*>& value_ptrs) {
+      const std::vector<void*>& value_ptrs) {
     return SingleTierStorage<K, V>::kv_->BatchCommit(keys, value_ptrs);
   }
 
-  Status TryInsert(K key, ValuePtr<V>* value_ptr) {
+  Status TryInsert(K key, void* value_ptr) {
     return SingleTierStorage<K, V>::kv_->Insert(key, value_ptr);
   }
 
-  Status Commit(K keys, const ValuePtr<V>* value_ptr) override{
+  Status Commit(K keys, const void* value_ptr) override{
     return SingleTierStorage<K, V>::kv_->Commit(keys, value_ptr);
   }
  
@@ -382,12 +359,8 @@ class DramStorage : public SingleTierStorage<K, V> {
   friend class HbmDramSsdStorage<K, V>;
 #endif
  protected:
-  void SetTotalDims(int64 total_dims) override {
-    SingleTierStorage<K, V>::kv_->SetTotalDims(total_dims);
-  }
-
   void Shrink(std::vector<K>& key_list,
-              std::vector<ValuePtr<V>*>& value_ptr_list,
+              std::vector<void*>& value_ptr_list,
               ShrinkArgs& shrink_args,
               int64 value_len) override {
     SingleTierStorage<K, V>::Shrink(
@@ -402,9 +375,10 @@ class DramStorage : public SingleTierStorage<K, V> {
 template<typename K, typename V>
 class HbmStorage : public SingleTierStorage<K, V> {
  public:
-  HbmStorage(const StorageConfig& sc, Allocator* alloc,
-      LayoutCreator<V>* lc) : SingleTierStorage<K, V>(
-          sc, alloc, new GPUHashMapKV<K, V>(sc.embedding_config, alloc), lc) {
+  HbmStorage(const StorageConfig& sc, Allocator* gpu_allocator,
+      FeatureDescriptor<V>* feat_desc) : SingleTierStorage<K, V>(
+        sc, new GPUHashMapKV<K, V>(
+            sc.embedding_config, gpu_allocator), feat_desc) {
   }
   ~HbmStorage() override {}
 
@@ -477,48 +451,27 @@ class HbmStorage : public SingleTierStorage<K, V> {
   GPUHashTable<K, V>* HashTable() override {
     return SingleTierStorage<K, V>::kv_->HashTable();
   }
-
- protected:
-  void SetTotalDims(int64 total_dims) override {}
 };
 
 template<typename K, typename V>
 class HbmStorageWithCpuKv: public SingleTierStorage<K, V> {
  public:
-  HbmStorageWithCpuKv(const StorageConfig& sc, Allocator* alloc,
-      LayoutCreator<V>* lc) : SingleTierStorage<K, V>(
-          sc, alloc, new LocklessHashMap<K, V>(), lc) {
+  HbmStorageWithCpuKv(const StorageConfig& sc,
+      FeatureDescriptor<V>* feat_desc) : SingleTierStorage<K, V>(
+        sc, new LocklessHashMap<K, V>(feat_desc), feat_desc) {
   }
 
   ~HbmStorageWithCpuKv() override {}
 
-  void Insert(K key, ValuePtr<V>* value_ptr) override {
-    do {
-      Status s = SingleTierStorage<K, V>::kv_->Insert(key, value_ptr);
-      if (s.ok()) {
-        break;
-      } else {
-        value_ptr->Destroy(SingleTierStorage<K, V>::alloc_);
-        delete value_ptr;
-      }
-    } while (!(SingleTierStorage<K, V>::kv_->Lookup(key, &value_ptr)).ok());
-  }
-
-  void Insert(K key, ValuePtr<V>** value_ptr, size_t alloc_len) override {
-    SingleTierStorage<K, V>::Insert(key, value_ptr, alloc_len);
-  }
-
-  Status TryInsert(K key, ValuePtr<V>* value_ptr) {
+  Status TryInsert(K key, void* value_ptr) {
     return SingleTierStorage<K, V>::kv_->Insert(key, value_ptr);
   }
  public:
   friend class HbmDramStorage<K, V>;
   friend class HbmDramSsdStorage<K, V>;
  protected:
-  void SetTotalDims(int64 total_dims) override {}
-
   void Shrink(std::vector<K>& key_list,
-              std::vector<ValuePtr<V>*>& value_ptr_list,
+              std::vector<void*>& value_ptr_list,
               ShrinkArgs& shrink_args,
               int64 value_len) override {
     SingleTierStorage<K, V>::Shrink(
@@ -533,28 +486,25 @@ class HbmStorageWithCpuKv: public SingleTierStorage<K, V> {
 template<typename K, typename V>
 class PmemMemkindStorage : public SingleTierStorage<K, V> {
  public:
-  PmemMemkindStorage(const StorageConfig& sc, Allocator* alloc,
-      LayoutCreator<V>* lc) : SingleTierStorage<K, V>(
-          sc, alloc, new LocklessHashMap<K, V>(), lc) {
+  PmemMemkindStorage(const StorageConfig& sc,
+      FeatureDescriptor<V>* feat_desc) : SingleTierStorage<K, V>(
+          sc, new LocklessHashMap<K, V>(feat_desc), feat_desc) {
   }
   ~PmemMemkindStorage() override {}
 
   TF_DISALLOW_COPY_AND_ASSIGN(PmemMemkindStorage);
- 
- protected:
-  void SetTotalDims(int64 total_dims) override {}
 };
 
 template<typename K, typename V>
 class PmemLibpmemStorage : public SingleTierStorage<K, V> {
  public:
-  PmemLibpmemStorage(const StorageConfig& sc, Allocator* alloc,
-      LayoutCreator<V>* lc) : SingleTierStorage<K, V>(
-          sc, alloc, new LocklessHashMap<K, V>(), lc) {
+  PmemLibpmemStorage(const StorageConfig& sc,
+      FeatureDescriptor<V>* feat_desc) : SingleTierStorage<K, V>(
+          sc, new LocklessHashMap<K, V>(feat_desc), feat_desc) {
   }
   ~PmemLibpmemStorage() override {}
 
-  Status Commit(K keys, const ValuePtr<V>* value_ptr) {
+  Status Commit(K keys, const void* value_ptr) {
     return SingleTierStorage<K, V>::kv_->Commit(keys, value_ptr);
   }
 
@@ -562,10 +512,8 @@ class PmemLibpmemStorage : public SingleTierStorage<K, V> {
  
  protected:
   friend class DramPmemStorage<K, V>;
-  void SetTotalDims(int64 total_dims) override {}
-
   void Shrink(std::vector<K>& key_list,
-              std::vector<ValuePtr<V>*>& value_ptr_list,
+              std::vector<void*>& value_ptr_list,
               ShrinkArgs& shrink_args,
               int64 value_len) override {
     SingleTierStorage<K, V>::Shrink(
@@ -579,15 +527,15 @@ class PmemLibpmemStorage : public SingleTierStorage<K, V> {
 template<typename K, typename V>
 class LevelDBStore : public SingleTierStorage<K, V> {
  public:
-  LevelDBStore(const StorageConfig& sc, Allocator* alloc,
-      LayoutCreator<V>* lc) : SingleTierStorage<K, V>(
-          sc, alloc, new LevelDBKV<K, V>(sc.path), lc) {
+  LevelDBStore(const StorageConfig& sc,
+      FeatureDescriptor<V>* feat_desc) : SingleTierStorage<K, V>(
+          sc, new LevelDBKV<K, V>(sc.path, feat_desc), feat_desc) {
   }
   ~LevelDBStore() override {}
 
   TF_DISALLOW_COPY_AND_ASSIGN(LevelDBStore);
 
-  Status Commit(K keys, const ValuePtr<V>* value_ptr) {
+  Status Commit(K keys, const void* value_ptr) {
     return SingleTierStorage<K, V>::kv_->Commit(keys, value_ptr);
   }
 
@@ -597,29 +545,25 @@ class LevelDBStore : public SingleTierStorage<K, V> {
     LevelDBKV<K, V>* leveldb_kv =
         reinterpret_cast<LevelDBKV<K, V>*>(SingleTierStorage<K, V>::kv_);
     return new DBValueIterator<K, V>(
-        key_list, emb_index, value_len, leveldb_kv);
+        key_list, emb_index, value_len,
+        leveldb_kv, SingleTierStorage<K, V>::feat_desc_);
   }
  public:
   friend class DramLevelDBStore<K, V>;
-
- protected:
-  void SetTotalDims(int64 total_dims) override {
-    SingleTierStorage<K, V>::kv_->SetTotalDims(total_dims);
-  }
 };
 
 template<typename K, typename V>
 class SsdHashStorage : public SingleTierStorage<K, V> {
  public:
-  SsdHashStorage(const StorageConfig& sc, Allocator* alloc,
-      LayoutCreator<V>* lc) : SingleTierStorage<K, V>(
-          sc, alloc, new SSDHashKV<K, V>(sc.path, alloc), lc) {
+  SsdHashStorage(const StorageConfig& sc,
+      FeatureDescriptor<V>* feat_desc) : SingleTierStorage<K, V>(
+          sc, new SSDHashKV<K, V>(sc.path, feat_desc), feat_desc) {
   }
   ~SsdHashStorage() override {}
 
   TF_DISALLOW_COPY_AND_ASSIGN(SsdHashStorage);
 
-  Status Commit(K keys, const ValuePtr<V>* value_ptr) {
+  Status Commit(K keys, const void* value_ptr) {
     return SingleTierStorage<K, V>::kv_->Commit(keys, value_ptr);
   }
 
@@ -680,8 +624,9 @@ class SsdHashStorage : public SingleTierStorage<K, V> {
 #endif
 
  protected:
-  void SetTotalDims(int64 total_dims) override {
-    SingleTierStorage<K, V>::kv_->SetTotalDims(total_dims);
+  void Init() override {
+    dynamic_cast<SSDHashKV<K, V>*>(
+        SingleTierStorage<K, V>::kv_)->Init();
   }
 };
 } // embedding

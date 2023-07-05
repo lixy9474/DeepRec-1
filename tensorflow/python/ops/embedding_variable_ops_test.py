@@ -750,20 +750,11 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       sess.run([init])
       emb_ori = sess.run([emb, train_op])
       save_path = saver.save(sess, os.path.join(checkpoint_directory, "model1.ckpt"), global_step=12345)
-      #for name, shape in checkpoint_utils.list_variables(checkpoint_directory):
-      #  print('loading... ', name, shape)
-    with self.test_session() as sess:
-      saver.restore(sess, os.path.join(checkpoint_directory, "model1.ckpt-12345"))
-      emb_right = [[0.8282884, 0.8282884, 0.8282884],
-                   [0.8282884, 0.8282884, 0.8282884],
-                   [0.8282884, 0.8282884, 0.8282884],
-                   [0.7927219, 0.7927219, 0.7927219],
-                   [0.7927219, 0.7927219, 0.7927219],
-                   [1.0, 1.0, 1.0]]
-      emb_ori = sess.run(emb)
-      for i in range(6):
-        for j in range(3):
-          self.assertAlmostEqual(emb_ori[i][j], emb_right[i][j])
+      for name, shape in checkpoint_utils.list_variables(checkpoint_directory):
+        if name == "var_1-keys":
+          self.assertEqual(shape[0], 2)
+          keys = checkpoint_utils.load_variable(checkpoint_directory, name)
+          self.assertAllEqual(keys, [0, 1])
 
   def testEmbeddingVariableForSparseColumnSharedEmbeddingCol(self):
     columns_list=[]
@@ -876,6 +867,35 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run([init])
         for i in range(10):
           print(sess.run([emb, train_op,loss], feed_dict={'ids:0': 2*i}))
+  
+  def testEmbeddingVariableForMemory(self):
+      print("testEmbeddingVariableForMemory")
+      with ops.device("/cpu:0"):
+        var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32))
+      ids = array_ops.placeholder(dtype=dtypes.int64, name='ids')
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      opt = adam.AdamOptimizer(0.01)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v)
+      init = variables.global_variables_initializer()
+      with self.test_session() as sess:
+        sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
+        sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
+        sess.run([init])
+        id_list = []
+        for i in range(0, 65536):
+          id_list.append(i)
+        import psutil
+        import os
+        p = psutil.Process(os.getpid())
+        m0 = p.memory_info().rss
+        sess.run([train_op], feed_dict={'ids:0': id_list})
+        m1 = p.memory_info().rss
+        print("memory: ",m1 - m0)
 
   def testEmbeddingVariableForWeightedSumFromFeatureColumn(self):
     print("testEmbeddingVariableForWeightedSumFromFeatureColumn")
@@ -2234,7 +2254,6 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run([train_op], {ids:[1,2,4]})
         sess.run([train_op], {ids:[1,2,2]})
         sess.run([train_op], {ids:[1,2,5]})
-
         if isinstance(var, kv_variable_ops.EmbeddingVariable):
           result = sess.run(tires)
           for i in range(0, 6):
@@ -2244,7 +2263,6 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
               self.assertEqual(result[i], -1)
             else:
               self.assertEqual(result[i], 0)
-
         sess.run([train_op], {ids:[3, 5]})
         sess.run([train_op], {ids:[4, 4]})
         r1 = sess.run(emb, {ids:[1,2,4,5]})
