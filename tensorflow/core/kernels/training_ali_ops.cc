@@ -141,7 +141,7 @@ class KvSparseApplyAdagradOp : public OpKernel {
             (int64 start_i, int64 limit_i) {
           for (int64 i = start_i; i < limit_i; i++) {
             const TKey index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
@@ -542,7 +542,7 @@ class KvSparseApplyFtrlOp : public OpKernel {
             (int64 start_i, int64 limit_i) {
           for (int64 i = start_i; i < limit_i; i++) {
             const TKey index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var_->LookupOrCreateKey(index, &value_ptr,
@@ -1301,7 +1301,7 @@ class KvSparseApplyAdagradDecayOp : public OpKernel {
             (int64 start_i, int64 limit_i) {
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
@@ -1505,10 +1505,9 @@ class KvSparseApplyAdamOp : public OpKernel {
           auto indices_vec = indices.vec<Tindex>();
 
           int64 gs = global_step.scalar<int64>()();
-
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter =false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
@@ -2412,7 +2411,7 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
           Tstep gs = global_step.scalar<Tstep>()();
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
@@ -2461,7 +2460,7 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
 
             for (int64 i = start_i; i < limit_i; i++) {
               const Tindex index = indices_vec(i);
-              ValuePtr<T>* value_ptr = nullptr;
+              void* value_ptr = nullptr;
               bool is_filter = false;
               int64 count = get_count_fn(indices_counts, i);
               OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
@@ -2939,7 +2938,7 @@ class KvResourceSparseApplyGradientDescentOp : public OpKernel {
             (int64 start_i, int64 limit_i) {
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter = false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,
@@ -3136,7 +3135,7 @@ class KvSparseApplyAdamWOp : public OpKernel {
 
           for (int64 i = start_i; i < limit_i; i++) {
             const Tindex index = indices_vec(i);
-            ValuePtr<T>* value_ptr = nullptr;
+            void* value_ptr = nullptr;
             bool is_filter =false;
             int64 count = get_count_fn(indices_counts, i);
             OP_REQUIRES_OK(ctx, var->LookupOrCreateKey(index, &value_ptr,

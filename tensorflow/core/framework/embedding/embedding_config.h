@@ -102,9 +102,7 @@ struct EmbeddingConfig {
   }
 
   bool is_save_freq() const {
-    return filter_freq != 0 ||
-           record_freq ||
-           normal_fix_flag == 1;
+    return filter_freq != 0 || record_freq;
   }
 
   bool is_save_version() const {

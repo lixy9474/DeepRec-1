@@ -50,7 +50,7 @@ class EmbeddingMemoryPool {
     return ptr;
   }
 
-  void Deallocate(std::vector<ValuePtr<V>*> value_ptrs) {
+  void Deallocate(std::vector<void*> value_ptrs) {
     int64 prev_size = value_ptrs_queue_.size();
     for (auto it : value_ptrs) {
       value_ptrs_queue_.emplace_back(it);
@@ -60,8 +60,7 @@ class EmbeddingMemoryPool {
       n = std::min(prev_size, n);
       for (int64 i = 0; i < n; i++) {
         ValuePtr<V>* val = value_ptrs_queue_.front();
-        free_ptr_queue_.emplace_back(val->GetValue(0, 0));
-        delete val;
+        free_ptr_queue_.emplace_back(value_ptrs);
         value_ptrs_queue_.pop_front();
       }
     }
@@ -88,7 +87,7 @@ class EmbeddingMemoryPool {
   int64 embs_per_block_;
   Allocator* alloc_;
   std::deque<V*> free_ptr_queue_;
-  std::deque<ValuePtr<V>*> value_ptrs_queue_;
+  std::deque<void*> value_ptrs_queue_;
   std::vector<V*> block_list_;
 };
 } //embedding

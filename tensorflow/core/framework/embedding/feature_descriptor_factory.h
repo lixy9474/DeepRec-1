@@ -1,0 +1,58 @@
+/* Copyright 2022 The DeepRec Authors. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+======================================================================*/
+#ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_FEATURE_DESCRIPTOR_FACTORY_H_
+#define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_FEATURE_DESCRIPTOR_FACTORY_H_
+
+#include "tensorflow/core/framework/embedding/config.pb.h"
+#include "tensorflow/core/framework/embedding/embedding_config.h"
+#include "tensorflow/core/framework/embedding/normal_feature_descriptor.h"
+#include "tensorflow/core/framework/embedding/hbm_multi_tier_feature_descriptor.h"
+#include "tensorflow/core/lib/core/status.h"
+
+
+namespace tensorflow {
+namespace embedding {
+/*class FeatureDescriptorFactory {
+ public:
+  template<typename V>
+  static FeatureDescriptor<V>* Create(
+      const EmbeddingConfig& emb_config,
+      Allocator* alloc,
+      StorageType storage_type) {
+    bool need_record_freq = emb_config.is_save_freq();
+    bool need_record_version = emb_config.is_save_version();
+    bool has_counter_filter = emb_config.is_counter_filter();
+    std::pair<bool, int64> filter_info(has_counter_filter, emb_config.filter_freq);
+
+    if (storage_type == StorageType::HBM_DRAM || 
+        storage_type == StorageType::HBM_DRAM_SSDHASH) {
+#if GOOGLE_CUDA
+      return new HbmMultiTierFeatureDescriptor<V>(
+          alloc, emb_config.slot_num + 1,
+          need_record_freq, need_record_version,
+          filter_info);
+#endif //GOOGLE_CUDA
+    } else {
+      return new NormalFeatureDescriptor<V>(
+          alloc, emb_config.slot_num + 1,
+          need_record_freq, need_record_version,
+          filter_info);
+    }
+  }
+};*/
+} // embedding
+} // tensorflow
+
+#endif // TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_FEATURE_DESCRIPTOR_FACTORY_H_

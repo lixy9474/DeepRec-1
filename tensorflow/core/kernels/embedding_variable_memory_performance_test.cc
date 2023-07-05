@@ -116,6 +116,7 @@ EmbeddingVar<int64, float>* CreateEmbeddingVar(
               {1024, 1024, 1024, 1024}, "light",
               embedding_config),
           allocator,
+          feat_desc,
           "emb_var");
 	auto ev = new EmbeddingVar<int64, float>(
       "emb_var",

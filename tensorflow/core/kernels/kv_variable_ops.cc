@@ -210,16 +210,16 @@ class InitializeKvVariableOp : public OpKernel {
     int64 storage_type = 0;
     OP_REQUIRES_OK(c, c->GetAttr("storage_type", &storage_type));
     storage_type_ = static_cast<embedding::StorageType>(storage_type);
-    auto device_type_str = c->device_type().type_string();
+    device_type_str_ = c->device_type().type_string();
     if (storage_type_ == embedding::DEFAULT) {
-      if (device_type_str == "CPU") {
+      if (device_type_str_ == "CPU") {
         storage_type_ = embedding::DRAM;
       } else {
         storage_type_ = embedding::HBM;
       }
     }
 
-    bool if_op_on_gpu = (device_type_str == "GPU");
+    bool if_op_on_gpu = (device_type_str_ == "GPU");
     bool if_embedding_on_hbm = (storage_type_ == embedding::HBM ||
                                 storage_type_ == embedding::HBM_DRAM ||
                                 storage_type_ == embedding::HBM_DRAM_SSDHASH);
@@ -235,6 +235,8 @@ class InitializeKvVariableOp : public OpKernel {
     }
 
     OP_REQUIRES_OK(c, c->GetAttr("layout", &layout_));
+    record_freq_ |= (storage_type > 5);
+    record_version_ |= (storage_type > 5);
     if (!layout_.empty()) {
       // use layout by user configuration
     } else if ((filter_freq_ != 0 && max_element_size_ == 0)
@@ -315,7 +317,7 @@ class InitializeKvVariableOp : public OpKernel {
               context, handle_self, &ev,
               [this, default_values, opname, context,
                handle_self](EmbeddingVar<TKey, TValue>** ptr) {
-            Allocator* gpu_allocator =
+            Allocator* allocator =
                 context->device()->GetAllocator(AllocatorAttributes());
             auto embedding_config = EmbeddingConfig(
                 emb_index_ + block_num_ * slot_index_,
@@ -328,19 +330,28 @@ class InitializeKvVariableOp : public OpKernel {
                 default_value_no_permission_,
                 record_freq_, record_version_,
                 is_inference_);
+            Allocator* alloc_for_ev =
+                (device_type_str_ == "CPU") ? ev_allocator() : allocator;
+            auto feat_desc = new embedding::FeatureDescriptor<TValue>(
+                block_num_, slot_num_ + 1, alloc_for_ev, storage_type_,
+                record_freq_,
+                embedding_config.is_save_version(),
+                {embedding_config.is_counter_filter(), filter_freq_});
             auto storage =
                 embedding::StorageFactory::Create<TKey, TValue>(
                     embedding::StorageConfig(
                         storage_type_, storage_path_,
                         storage_size_, layout_,
                         embedding_config),
-                    gpu_allocator,
+                    alloc_for_ev,
+                    feat_desc,
                     handle_self.name());
             *ptr = new EmbeddingVar<TKey, TValue>(
                 handle_self.name(),
                 storage,
                 embedding_config,
-                gpu_allocator);
+                alloc_for_ev,
+                feat_desc);
             return Status::OK();
           }));
       ev->Init(default_values, default_value_dim_);
@@ -353,8 +364,7 @@ class InitializeKvVariableOp : public OpKernel {
               [this, default_values, opname,
                handle_primary, context](EmbeddingVar<TKey, TValue>** ptr) {
             int64 primary_slot_index(0), primary_emb_index(0);
-            Allocator* gpu_allocator = context->device()->GetAllocator(AllocatorAttributes());
-            //Allocator* gpu_allocator = context->get_allocator(AllocatorAttributes());
+            Allocator* allocator = context->device()->GetAllocator(AllocatorAttributes());
             auto embedding_config = EmbeddingConfig(
                 primary_emb_index + block_num_ * primary_slot_index,
                 primary_emb_index,
@@ -364,19 +374,28 @@ class InitializeKvVariableOp : public OpKernel {
                 max_element_size_, false_positive_probability_,
                 counter_type_, 0, record_freq_, record_version_,
                 is_inference_);
+            Allocator* alloc_for_ev =
+                (device_type_str_ == "CPU") ? ev_allocator() : allocator;
+            auto feat_desc = new embedding::FeatureDescriptor<TValue>(
+                block_num_, slot_num_ + 1, alloc_for_ev, storage_type_,
+                record_freq_,
+                embedding_config.is_save_version(),
+                {embedding_config.is_counter_filter(), filter_freq_});
             auto storage =
                 embedding::StorageFactory::Create<TKey, TValue>(
                     embedding::StorageConfig(
                         storage_type_, storage_path_,
                         storage_size_, layout_,
                         embedding_config),
-                    gpu_allocator,
+                    alloc_for_ev,
+                    feat_desc,
                     handle_primary.name());
             *ptr = new EmbeddingVar<TKey, TValue>(
                 handle_primary.name(),
                 storage,
                 embedding_config,
-                gpu_allocator);
+                alloc_for_ev,
+                feat_desc);
             // default_values is slot value, should not to initialize primary value
             return Status::OK();
           }));
@@ -387,20 +406,26 @@ class InitializeKvVariableOp : public OpKernel {
             context, handle_self, &ev,
             [this, default_values, opname, primary_variable,
              handle_self, context](EmbeddingVar<TKey, TValue>** ptr) {
+           Allocator* allocator = context->device()->GetAllocator(AllocatorAttributes());
+          auto embedding_config = EmbeddingConfig(
+              emb_index_ + block_num_ * slot_index_,
+              emb_index_,
+              block_num_, slot_num_, opname,
+              steps_to_live_, filter_freq_,
+              max_freq_, l2_weight_threshold_,
+              layout_, max_element_size_,
+              false_positive_probability_,
+              counter_type_, default_value_dim_,
+              default_value_no_permission_,
+              record_freq_, record_version_,
+              is_inference_);
+          Allocator* alloc_for_ev =
+                (device_type_str_ == "CPU") ? ev_allocator() : allocator;
           *ptr = new EmbeddingVar<TKey, TValue>(handle_self.name(),
               primary_variable->storage(),
-              EmbeddingConfig(emb_index_ + block_num_ * slot_index_,
-                              emb_index_,
-                              block_num_, slot_num_, opname,
-                              steps_to_live_, filter_freq_,
-                              max_freq_, l2_weight_threshold_,
-                              layout_, max_element_size_,
-                              false_positive_probability_,
-                              counter_type_, default_value_dim_,
-                              default_value_no_permission_,
-                              record_freq_, record_version_,
-                              is_inference_),
-          primary_variable->GetAllocator());
+              embedding_config,
+              alloc_for_ev,
+              primary_variable->feature_descriptor());
           return (*ptr)->Init(default_values, default_value_dim_);
         }));
       core::ScopedUnref unref_me(primary_variable);
@@ -436,6 +461,7 @@ class InitializeKvVariableOp : public OpKernel {
   bool record_freq_;
   bool record_version_;
   bool is_inference_;
+  std::string device_type_str_;
 };
 
 #define REGISTER_KERNELS(ktype, vtype)                               \
