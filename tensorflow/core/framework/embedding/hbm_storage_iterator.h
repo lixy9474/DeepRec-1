@@ -28,10 +28,11 @@ class HbmValueIterator: public ValueIterator<V> {
  public:
   HbmValueIterator(
       const std::vector<K>& key_list,
-      const std::vector<ValuePtr<V>*>& value_ptr_list,
+      const std::vector<void*>& value_ptr_list,
       int64 emb_index,
       int64 value_len,
-      Allocator* alloc)
+      Allocator* alloc,
+      FeatureDescriptor<V>* feat_desc)
       : value_len_(value_len),
         alloc_(alloc) {
     int64 emb_offset = value_len_ * emb_index;
@@ -40,7 +41,7 @@ class HbmValueIterator: public ValueIterator<V> {
       for (int part_id = 0; part_id < kSavedPartitionNum; part_id++) {
         if (key_list[i] % kSavedPartitionNum == part_id) {
           value_parts_vec[part_id].emplace_back(
-              value_ptr_list[i]->GetValue(emb_index, emb_offset));
+              feat_desc->GetEmbedding(value_ptr_list[i], emb_index));
           break;
         }
       }
@@ -87,8 +88,10 @@ class HbmValueIterator: public ValueIterator<V> {
         num_of_embs_,
         (int64)(values_.size() - counter_));
     std::vector<V*> local_addr_list(total_num);
+    auto iter = values_iter_;
     for (int64 i = 0; i < total_num; i++) {
-      local_addr_list[i] = *values_iter_;
+      local_addr_list[i] = *iter;
+      iter++;
     }
     cudaMemcpy(dev_addr_list_,
                local_addr_list.data(),

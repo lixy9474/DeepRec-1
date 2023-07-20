@@ -373,6 +373,8 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
           self._slot_num = 0 
         else:
           self._slot_num = evconfig.slot_num
+        if self._is_primary:
+          self._import_dependency_ops = []
         with ops.name_scope("IsInitialized"):
           self._is_initialized_op = (
               gen_kv_variable_ops.kv_var_is_initialized_op(self._handle,
@@ -433,7 +435,10 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
               set_attr_ops.append(self._set_cache_strategy_op)
             with ops.control_dependencies(set_attr_ops + [self._init_op]):
               self._initializer_op = control_flow_ops.no_op()
-        
+        if self._is_primary:
+          self._import_dependency_ops.append(self._initializer_op)
+        else:
+          self._primary._import_dependency_ops.append(self._initializer_op)
         self._graph_element = self._handle
         self._cached_value = None
         if not context.executing_eagerly():

@@ -195,7 +195,11 @@ class EmbeddingVariableSaveable(saveable_object.SaveableObject):
       if self.var._init_data_source is not None:
         return self.var.recover_from_init_data_source(self.var._init_data_source, self.partition_id, self.partition_num)
       else:
-        with ops.control_dependencies([self.var._initializer_op]):
+        if self.var._is_primary:
+          import_dependency_ops = self.var._import_dependency_ops
+        else:
+          import_dependency_ops = self.var._primary._import_dependency_ops
+        with ops.control_dependencies(import_dependency_ops):
           rank = self.op.initial_value.get_shape().rank - 1
           restore_op = gen_kv_variable_ops.kv_resource_import_v3(
               restored_tensors[0],
