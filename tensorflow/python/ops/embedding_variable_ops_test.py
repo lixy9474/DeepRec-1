@@ -2770,5 +2770,225 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         self.assertNotEqual(val, 1.0)
     del os.environ["TF_EMBEDDING_FBJ_OPT"]
 
+  def testGetFreqWithPartition(self):
+    print("testGetFreqWithPartition")
+    os.environ["TF_RECORD_FREQ"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+      emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v)
+      init = variables.global_variables_initializer()
+      freqs = kv_variable_ops.lookup_freq(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op)
+        result = sess.run(freqs)
+        self.assertAllEqual(result, [4, 3, 2, 1])
+    del os.environ["TF_RECORD_FREQ"]
+
+  def testGetFreqWithoutPartition(self):
+    print("testGetFreqWithoutPartition")
+    os.environ["TF_RECORD_FREQ"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32))
+      emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v)
+      init = variables.global_variables_initializer()
+      freqs = kv_variable_ops.lookup_freq(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op)
+        result = sess.run(freqs)
+        self.assertAllEqual(result, [4, 3, 2, 1])
+    del os.environ["TF_RECORD_FREQ"]
+
+  def testAddFreqWithPartition(self):
+    print("testAddFreqWithPartition")
+    os.environ["TF_RECORD_FREQ"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+      emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v)
+      init = variables.global_variables_initializer()
+      freqs = kv_variable_ops.lookup_freq(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      add_freq_ops = kv_variable_ops.add_freq(var, math_ops.cast([1,2,3,4], dtypes.int64), freqs)
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op)
+        result = sess.run(freqs)
+        sess.run(add_freq_ops)
+        result = sess.run(freqs)
+        self.assertAllEqual(result, [8, 6, 4, 2])
+    del os.environ["TF_RECORD_FREQ"]
+
+  def testAddFreqWithoutPartition(self):
+    print("testAddFreqWithoutPartition")
+    os.environ["TF_RECORD_FREQ"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32))
+      emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v)
+      init = variables.global_variables_initializer()
+      freqs = kv_variable_ops.lookup_freq(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      add_freq_ops = kv_variable_ops.add_freq(var, math_ops.cast([1,2,3,4], dtypes.int64), freqs)
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op)
+        result = sess.run(freqs)
+        sess.run(add_freq_ops)
+        result = sess.run(freqs)
+        self.assertAllEqual(result, [8, 6, 4, 2])
+    del os.environ["TF_RECORD_FREQ"]
+
+  def testGetVersionWithPartition(self):
+    print("testGetVersionWithPartition")
+    os.environ["TF_RECORD_VERSION"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      versions = kv_variable_ops.lookup_version(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op, feed_dict={ids:[4]})
+        sess.run(train_op, feed_dict={ids:[3]})
+        sess.run(train_op, feed_dict={ids:[2]})
+        sess.run(train_op, feed_dict={ids:[1]})
+        result = sess.run(versions)
+        self.assertAllEqual(result, [4, 3, 2, 1])
+    del os.environ["TF_RECORD_VERSION"]
+
+  def testGetVersionWithoutPartition(self):
+    print("testGetVersionWithoutPartition")
+    os.environ["TF_RECORD_VERSION"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32))
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      versions = kv_variable_ops.lookup_version(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op, feed_dict={ids:[4]})
+        sess.run(train_op, feed_dict={ids:[3]})
+        sess.run(train_op, feed_dict={ids:[2]})
+        sess.run(train_op, feed_dict={ids:[1]})
+        result = sess.run(versions)
+        self.assertAllEqual(result, [4, 3, 2, 1])
+    del os.environ["TF_RECORD_VERSION"]
+
+  def testUpdateVersionWithPartition(self):
+    print("testUpdateVersionWithPartition")
+    os.environ["TF_RECORD_VERSION"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      versions = kv_variable_ops.lookup_version(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      version_1 = array_ops.constant(3)
+      version_2 = array_ops.constant(4)
+      update_version_op_1 = kv_variable_ops.update_version(
+          var, math_ops.cast([1,2], dtypes.int64), version_1)
+      update_version_op_2 = kv_variable_ops.update_version(
+          var, math_ops.cast([3,4], dtypes.int64), version_2)
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op, feed_dict={ids:[1, 2, 3, 4]})
+        sess.run(update_version_op_1)
+        sess.run(update_version_op_2)
+        result = sess.run(versions)
+        self.assertAllEqual(result, [3, 3, 4, 4])
+    del os.environ["TF_RECORD_VERSION"]
+
+  def testUpdateVersionWithoutPartition(self):
+    print("testUpdateVersionWithoutPartition")
+    os.environ["TF_RECORD_VERSION"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32))
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      versions = kv_variable_ops.lookup_version(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      version_1 = array_ops.constant(3)
+      version_2 = array_ops.constant(4)
+      update_version_op_1 = kv_variable_ops.update_version(
+          var, math_ops.cast([1,2], dtypes.int64), version_1)
+      update_version_op_2 = kv_variable_ops.update_version(
+          var, math_ops.cast([3,4], dtypes.int64), version_2)
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op, feed_dict={ids:[1, 2, 3, 4]})
+        sess.run(update_version_op_1)
+        sess.run(update_version_op_2)
+        result = sess.run(versions)
+        self.assertAllEqual(result, [3, 3, 4, 4])
+    del os.environ["TF_RECORD_VERSION"]
+
 if __name__ == "__main__":
   googletest.main()

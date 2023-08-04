@@ -477,9 +477,18 @@ class EVGetFrequencyOp : public OpKernel {
 
     Tensor* output;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {indices.NumElements()}, &output));
-    for (int i = 0; i < indices.NumElements(); ++i) {
-      int64 f = ev->GetFreq(indices_flat(i));
-      output->flat<int64>()(i) = f;
+    if (!ev->IsSingleHbm()) {
+      auto lookup_freq_fn = [ev, output, indices_flat]
+          (int64 start, int64 end) {
+        for (int i = start; i < end; ++i) {
+          int64 f = ev->GetFreq(indices_flat(i));
+          output->flat<int64>()(i) = f;
+        }
+      };
+      auto worker_threads = ctx->device()->tensorflow_cpu_worker_threads();
+      Shard(worker_threads->num_threads,
+            worker_threads->workers, indices.NumElements(),
+            200/*latency of a memory acess*/, lookup_freq_fn);
     }
   }
 };
@@ -497,6 +506,83 @@ TF_CALL_FLOAT_TYPES(REGISTER_KERNELS_ALL)
 #undef REGISTER_KERNELS_ALL
 #undef REGISTER_KERNELS
 
+#if GOOGLE_CUDA
+#define REGISTER_KERNELS(ktype, vtype)                          \
+  REGISTER_KERNEL_BUILDER(Name("EVGetFrequency")                  \
+                            .Device(DEVICE_GPU)                 \
+                            .HostMemory("ids")                  \
+                            .HostMemory("output")               \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("dtype"),    \
+                          EVGetFrequencyOp<ktype, vtype>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type)                                 \
+  REGISTER_KERNELS(int64, type)
+TF_CALL_GPU_NUMBER_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+#endif  // GOOGLE_CUDA
+
+template <typename TKey, typename TValue>
+class EVAddFrequencyOp : public OpKernel {
+ public:
+  explicit EVAddFrequencyOp(OpKernelConstruction* c) : OpKernel(c) {}
+
+  void Compute(OpKernelContext* ctx) override {
+    EmbeddingVar<TKey, TValue>* ev = nullptr;
+    OP_REQUIRES_OK(ctx,
+                   LookupResource(ctx, HandleFromInput(ctx, 0), &ev));
+    core::ScopedUnref unref_me(ev);
+    const Tensor& indices = ctx->input(1);
+    auto indices_flat = indices.flat<TKey>();
+    const Tensor& counts = ctx->input(2);
+    auto counts_flat = counts.flat<int64>();
+
+    if (!ev->IsSingleHbm()) {
+      auto lookup_freq_fn = [ev, indices_flat, counts_flat]
+          (int64 start, int64 end) {
+        for (int i = start; i < end; ++i) {
+          ev->AddFreq(indices_flat(i), counts_flat(i));
+        }
+      };
+      auto worker_threads = ctx->device()->tensorflow_cpu_worker_threads();
+      Shard(worker_threads->num_threads,
+            worker_threads->workers, indices.NumElements(),
+            200/*latency of a memory acess*/, lookup_freq_fn);
+    }
+  }
+};
+
+#define REGISTER_KERNELS(ktype, vtype)                          \
+  REGISTER_KERNEL_BUILDER(Name("EVAddFrequency")                \
+                            .Device(DEVICE_CPU)                 \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("Tvalues"),  \
+                          EVAddFrequencyOp<ktype, vtype>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type)                                 \
+  REGISTER_KERNELS(int64, type)
+TF_CALL_FLOAT_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+
+#if GOOGLE_CUDA
+#define REGISTER_KERNELS(ktype, vtype)                          \
+  REGISTER_KERNEL_BUILDER(Name("EVGetFrequency")                  \
+                            .Device(DEVICE_GPU)                 \
+                            .HostMemory("ids")                  \
+                            .HostMemory("counts")               \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("dtype"),    \
+                          EVAddFrequencyOp<ktype, vtype>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type)                                 \
+  REGISTER_KERNELS(int64, type)
+TF_CALL_GPU_NUMBER_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+#endif  // GOOGLE_CUDA
+
 template <typename TKey, typename TValue>
 class EVGetVersionOp : public OpKernel {
  public:
@@ -513,9 +599,18 @@ class EVGetVersionOp : public OpKernel {
     Tensor* output;
     OP_REQUIRES_OK(ctx,
         ctx->allocate_output(0, {indices.NumElements()}, &output));
-    for (int i = 0; i < indices.NumElements(); ++i) {
-      int64 v = ev->GetVersion(indices_flat(i));
-      output->flat<int64>()(i) = v;
+    if (!ev->IsSingleHbm()) {
+      auto lookup_freq_fn = [ev, output, indices_flat]
+          (int64 start, int64 end) {
+        for (int i = start; i < end; ++i) {
+          int64 v = ev->GetVersion(indices_flat(i));
+          output->flat<int64>()(i) = v;
+        }
+      };
+      auto worker_threads = ctx->device()->tensorflow_cpu_worker_threads();
+      Shard(worker_threads->num_threads,
+            worker_threads->workers, indices.NumElements(),
+            200/*latency of a memory acess*/, lookup_freq_fn);
     }
   }
 };
@@ -532,6 +627,92 @@ class EVGetVersionOp : public OpKernel {
 TF_CALL_FLOAT_TYPES(REGISTER_KERNELS_ALL)
 #undef REGISTER_KERNELS_ALL
 #undef REGISTER_KERNELS
+
+#if GOOGLE_CUDA
+#define REGISTER_KERNELS(ktype, vtype)                          \
+  REGISTER_KERNEL_BUILDER(Name("EVGetVersion")                  \
+                            .Device(DEVICE_GPU)                 \
+                            .HostMemory("ids")                  \
+                            .HostMemory("output")               \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("dtype"),    \
+                          EVGetVersionOp<ktype, vtype>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type)                                 \
+  REGISTER_KERNELS(int64, type)
+TF_CALL_GPU_NUMBER_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+#endif  // GOOGLE_CUDA
+
+template <typename TKey, typename TValue, typename TStep>
+class EVUpdateVersionOp : public OpKernel {
+ public:
+  explicit EVUpdateVersionOp(OpKernelConstruction* c) : OpKernel(c) {}
+
+  void Compute(OpKernelContext* ctx) override {
+    EmbeddingVar<TKey, TValue>* ev = nullptr;
+    OP_REQUIRES_OK(ctx,
+                   LookupResource(ctx, HandleFromInput(ctx, 0), &ev));
+    core::ScopedUnref unref_me(ev);
+    const Tensor& indices = ctx->input(1);
+    auto indices_flat = indices.flat<TKey>();
+    const Tensor& global_step = ctx->input(2);
+    OP_REQUIRES(
+      ctx, IsLegacyScalar(global_step.shape()),
+      errors::InvalidArgument(
+        "global_step is not a scalar: ", global_step.shape().DebugString()));
+    if (!ev->IsSingleHbm()) {
+      TStep gs = global_step.scalar<TStep>()();
+      auto lookup_freq_fn = [ev, indices_flat, gs]
+          (int64 start, int64 end) {
+        for (int i = start; i < end; ++i) {
+          ev->UpdateVersion(indices_flat(i), gs);
+        }
+      };
+      auto worker_threads = ctx->device()->tensorflow_cpu_worker_threads();
+      Shard(worker_threads->num_threads,
+            worker_threads->workers, indices.NumElements(),
+            200/*latency of a memory acess*/, lookup_freq_fn);
+    }
+  }
+};
+
+#define REGISTER_KERNELS(ktype, vtype, tstep)                   \
+  REGISTER_KERNEL_BUILDER(Name("EVUpdateVersion")               \
+                            .Device(DEVICE_CPU)                 \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("Tvalues")   \
+                            .TypeConstraint<tstep>("Tstep"),    \
+                          EVUpdateVersionOp<ktype, vtype, tstep>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type, int32)                          \
+  REGISTER_KERNELS(int64, type, int32)                          \
+  REGISTER_KERNELS(int32, type, int64)                          \
+  REGISTER_KERNELS(int64, type, int64)
+TF_CALL_FLOAT_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+
+#if GOOGLE_CUDA
+#define REGISTER_KERNELS(ktype, vtype, tstep)                   \
+  REGISTER_KERNEL_BUILDER(Name("EVUpdateVersion")               \
+                            .Device(DEVICE_GPU)                 \
+                            .HostMemory("ids")                  \
+                            .HostMemory("global_step")          \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("dtype")     \
+                            .TypeConstraint<tstep>("Tstep"),    \
+                          EVUpdateVersionOp<ktype, vtype, tstep>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type, int32)                          \
+  REGISTER_KERNELS(int64, type, int32)                          \
+  REGISTER_KERNELS(int32, type, int64)                          \
+  REGISTER_KERNELS(int64, type, int64)
+TF_CALL_GPU_NUMBER_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+#endif  // GOOGLE_CUDA
 
 template <typename TKey, typename TValue>
 class KvResourceLookupTierOp : public OpKernel {

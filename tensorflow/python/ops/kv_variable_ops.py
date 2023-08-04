@@ -995,12 +995,107 @@ def lookup_tier(var, ids):
           pindices, partitioned_result)
     return ret
 
+def lookup_freq(var, ids):
+  if isinstance(var, EmbeddingVariable):
+    return  gen_kv_variable_ops.ev_get_frequency(var._handle,
+                                            ids,
+                                            Tvalues=var._dtype)
+  elif isinstance(var, variables.PartitionedVariable):
+    ev_list = list(var)
+    np = len(ev_list)
+    partitioned_result = []
+    gather_ids, pindices = dynamic_partition(ids, np)
+    for (i, val) in enumerate(ev_list):
+      with ops.colocate_with(val):
+        result =  gen_kv_variable_ops.ev_get_frequency(val._handle,
+                                            gather_ids[i],
+                                            Tvalues=var._dtype)
+        partitioned_result.append(result)
+    from tensorflow.python.ops import data_flow_ops
+    ret = data_flow_ops.parallel_dynamic_stitch(
+          pindices, partitioned_result)
+    return ret
+
+def add_freq(var, ids, counts):
+  if isinstance(var, EmbeddingVariable):
+    return  gen_kv_variable_ops.ev_add_frequency(var._handle,
+                                            ids,
+                                            counts,
+                                            Tvalues=var._dtype)
+  elif isinstance(var, variables.PartitionedVariable):
+    ev_list = list(var)
+    np = len(ev_list)
+    partitioned_result = []
+    p_assignments = ids % 1000 % np
+    p_assignments = math_ops.cast(p_assignments, dtypes.int32)
+    from tensorflow.python.ops import data_flow_ops
+    update_ids = data_flow_ops.dynamic_partition(ids, p_assignments, np)
+    update_counts = data_flow_ops.dynamic_partition(counts, p_assignments, np)
+    for (i, val) in enumerate(ev_list):
+      with ops.colocate_with(val):
+        result =  gen_kv_variable_ops.ev_add_frequency(val._handle,
+                                            update_ids[i],
+                                            update_counts[i],
+                                            Tvalues=var._dtype)
+        partitioned_result.append(result)
+    return partitioned_result
+
+def lookup_version(var, ids):
+  if isinstance(var, EmbeddingVariable):
+    return  gen_kv_variable_ops.ev_get_version(var._handle,
+                                            ids,
+                                            Tvalues=var._dtype)
+  elif isinstance(var, variables.PartitionedVariable):
+    ev_list = list(var)
+    np = len(ev_list)
+    partitioned_result = []
+    gather_ids, pindices = dynamic_partition(ids, np)
+    for (i, val) in enumerate(ev_list):
+      with ops.colocate_with(val):
+        result =  gen_kv_variable_ops.ev_get_version(val._handle,
+                                            gather_ids[i],
+                                            Tvalues=var._dtype)
+        partitioned_result.append(result)
+    from tensorflow.python.ops import data_flow_ops
+    ret = data_flow_ops.parallel_dynamic_stitch(
+          pindices, partitioned_result)
+    return ret
+
+def update_version(var, ids, global_step):
+  if isinstance(var, EmbeddingVariable):
+    return  gen_kv_variable_ops.ev_update_version(var._handle,
+                                            ids,
+                                            global_step,
+                                            Tvalues=var._dtype)
+  elif isinstance(var, variables.PartitionedVariable):
+    ev_list = list(var)
+    np = len(ev_list)
+    partitioned_result = []
+    gather_ids, pindices = dynamic_partition(ids, np)
+    for (i, val) in enumerate(ev_list):
+      with ops.colocate_with(val):
+        update_op = gen_kv_variable_ops.ev_update_version(val._handle,
+                                            gather_ids[i],
+                                            global_step,
+                                            Tvalues=var._dtype)
+        partitioned_result.append(update_op)
+    return partitioned_result
+
 def lookup_resource(var):
   return gen_kv_variable_ops.kv_resource_lookup_resource(
       var.handle,
       Tkeys=var._invalid_key_type,
       dtype=var._dtype)
 
+def dynamic_partition(ids, np):
+  original_indices = math_ops.range(array_ops.size(ids))
+  p_assignments = ids % 1000 % np
+  p_assignments = math_ops.cast(p_assignments, dtypes.int32)
+  from tensorflow.python.ops import data_flow_ops
+  gather_ids = data_flow_ops.dynamic_partition(ids, p_assignments, np)
+  pindices = data_flow_ops.dynamic_partition(original_indices,
+                                             p_assignments, np)
+  return gather_ids, pindices
 
 # Register a conversion function which reads the value of the variable,
 # allowing instances of the class to be used as tensors.

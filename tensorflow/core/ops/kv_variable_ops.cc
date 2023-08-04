@@ -860,12 +860,35 @@ REGISTER_OP("EVGetFrequency")
     })
     .Doc(R"doc()doc");
 
+REGISTER_OP("EVAddFrequency")
+    .Input("resource_handle: resource")
+    .Input("ids: Tkeys")
+    .Input("counts: int64")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("Tvalues: type")
+    .SetShapeFn([](InferenceContext* c) {
+      return Status::OK();
+    })
+    .Doc(R"doc()doc");
+
 REGISTER_OP("EVGetVersion")
     .Input("resource_handle: resource")
     .Input("ids: Tkeys")
     .Output("output: int64")
     .Attr("Tkeys: {int64, int32}")
     .Attr("Tvalues: type")
+    .SetShapeFn([](InferenceContext* c) {
+      return Status::OK();
+    })
+    .Doc(R"doc()doc");
+
+REGISTER_OP("EVUpdateVersion")
+    .Input("resource_handle: resource")
+    .Input("ids: Tkeys")
+    .Input("global_step: Tstep")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("Tvalues: type")
+    .Attr("Tstep: {int64, int32}")
     .SetShapeFn([](InferenceContext* c) {
       return Status::OK();
     })

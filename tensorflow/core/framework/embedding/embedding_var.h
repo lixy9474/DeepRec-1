@@ -215,6 +215,18 @@ class EmbeddingVar : public ResourceBase {
     feat_desc_->UpdateVersion(value_ptr, gs);
   }
 
+  void UpdateVersion(K key, int64 gs) {
+    void* value_ptr = nullptr;
+    TF_CHECK_OK(LookupOrCreateKey(key, &value_ptr));
+    feat_desc_->UpdateVersion(value_ptr, gs);
+  }
+
+  void AddFreq(K key, int64 count) {
+    void* value_ptr = nullptr;
+    TF_CHECK_OK(LookupOrCreateKey(key, &value_ptr));
+    feat_desc_->AddFreq(value_ptr, count);
+  }
+
   void BatchCommit(const std::vector<K>& keys,
                    const std::vector<void*>& value_ptrs) {
     TF_CHECK_OK(storage_->BatchCommit(keys, value_ptrs));
