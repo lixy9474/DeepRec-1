@@ -628,6 +628,67 @@ class EmbeddingVar : public ResourceBase {
     return filter_;
   }
 
+  void GetKeySnapshot(K* output) {
+    std::vector<K> key_list;
+    std::vector<void*> value_ptr_list;
+    storage_->GetSnapshot(&key_list, &value_ptr_list);
+    memcpy(output, key_list.data(), sizeof(K) * key_list.size());
+  }
+
+  void GetVersionSnapshot(const EmbeddingVarContext<CPUDevice>& context,
+                            int64* output) {
+    std::vector<K> key_list;
+    std::vector<void*> value_ptr_list;
+    storage_->GetSnapshot(&key_list, &value_ptr_list);
+    auto get_version = [this, value_ptr_list, output]
+        (int64 start, int64 limit) {
+      for (int64 i = start; i < limit; i++) {
+        output[i] = feat_desc_->GetVersion(value_ptr_list[i]);
+      }
+    };
+    auto worker_threads = context.worker_threads;
+    Shard(worker_threads->num_threads,
+          worker_threads->workers, value_ptr_list.size(),
+          200, get_version);
+  }
+
+  void GetFrequencySnapshot(const EmbeddingVarContext<CPUDevice>& context,
+                            int64* output) {
+    std::vector<K> key_list;
+    std::vector<void*> value_ptr_list;
+    storage_->GetSnapshot(&key_list, &value_ptr_list);
+    auto get_freq = [this, value_ptr_list, output]
+        (int64 start, int64 limit) {
+      for (int64 i = start; i < limit; i++) {
+        output[i] = feat_desc_->GetFreq(value_ptr_list[i]);
+      }
+    };
+    auto worker_threads = context.worker_threads;
+    Shard(worker_threads->num_threads,
+          worker_threads->workers, value_ptr_list.size(),
+          200, get_freq);
+  }
+
+  void GetL2WeightSnapshot(const EmbeddingVarContext<CPUDevice>& context,
+                           V* output) {
+    std::vector<K> key_list;
+    std::vector<void*> value_ptr_list;
+    storage_->GetSnapshot(&key_list, &value_ptr_list);
+    auto compute_l2_weight = [this, value_ptr_list, output]
+        (int64 start, int64 limit) {
+      for (int64 i = start; i < limit; i++) {
+        Eigen::array<Eigen::DenseIndex, 1> dims({1});
+        auto l2_weight_flat = typename TTypes<V>::Flat(&output[i], dims);
+        auto val = flat(value_ptr_list[i]);
+        l2_weight_flat = val.square().sum() * static_cast<V>(0.5);
+      }
+    };
+    auto worker_threads = context.worker_threads;
+    Shard(worker_threads->num_threads,
+          worker_threads->workers, value_ptr_list.size(),
+          200, compute_l2_weight);
+  }
+
  protected:
   ~EmbeddingVar() override {
     // When dynamic dimension embedding is used,

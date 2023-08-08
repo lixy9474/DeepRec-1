@@ -905,6 +905,46 @@ REGISTER_OP("KvResourceLookupTier")
     })
     .Doc(R"doc()doc");
 
+REGISTER_OP("EVExportL2Weight")
+    .Input("resource_handle: resource")
+    .Output("output: dtype")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("dtype: type")
+    .SetShapeFn([](InferenceContext* c) {
+      return Status::OK();
+    })
+    .Doc(R"doc()doc");
+
+REGISTER_OP("EVExportFrequency")
+    .Input("resource_handle: resource")
+    .Output("output: int64")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("dtype: type")
+    .SetShapeFn([](InferenceContext* c) {
+      return Status::OK();
+    })
+    .Doc(R"doc()doc");
+
+REGISTER_OP("EVExportVersion")
+    .Input("resource_handle: resource")
+    .Output("output: int64")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("dtype: type")
+    .SetShapeFn([](InferenceContext* c) {
+      return Status::OK();
+    })
+    .Doc(R"doc()doc");
+
+REGISTER_OP("EVExportKey")
+    .Input("resource_handle: resource")
+    .Output("output: Tkeys")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("dtype: type")
+    .SetShapeFn([](InferenceContext* c) {
+      return Status::OK();
+    })
+    .Doc(R"doc()doc");
+
 REGISTER_OP("KvResourceLookupResource")
     .Input("resource_handle: resource")
     .Attr("Tkeys: {int64, int32}")

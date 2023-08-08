@@ -1081,6 +1081,73 @@ def update_version(var, ids, global_step):
         partitioned_result.append(update_op)
     return partitioned_result
 
+EQUAL = lambda x,y: math_ops.equal(x, y)
+NOE_EQUAL = lambda x,y: math_ops.not_equal(x, y)
+GREATER = lambda x,y: math_ops.greater(x, y)
+LESS = lambda x,y: math_ops.less(x, y)
+GREATER_EQUAL = lambda x,y: math_ops.greater_equal(x, y)
+LESS_EQUAL = lambda x,y: math_ops.less_equal(x, y)
+
+def selective_lookup_l2_weight(var, operator, threshold):
+  if isinstance(var, EmbeddingVariable):
+    l2_weights = gen_kv_variable_ops.ev_export_l2_weight(
+        var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
+    return filter_key_based_on_values(var, operator, l2_weights, threshold)
+  elif isinstance(var, variables.PartitionedVariable):
+    ev_list = list(var)
+    np = len(ev_list)
+    partitioned_result = []
+    for (i, val) in enumerate(ev_list):
+      with ops.colocate_with(val):
+        l2_weights = gen_kv_variable_ops.ev_export_l2_weight(
+            val._handle, Tkeys=val._invalid_key_type, dtype=val._dtype)
+        partitioned_result.append(
+            filter_key_based_on_values(val, operator, l2_weights, threshold))
+    return array_ops.concat(partitioned_result, 0)
+
+
+def selective_lookup_freq(var, operator, threshold):
+  if isinstance(var, EmbeddingVariable):
+    freqs = gen_kv_variable_ops.ev_export_frequency(
+        var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
+    return filter_key_based_on_values(var, operator, freqs, threshold)
+  elif isinstance(var, variables.PartitionedVariable):
+    ev_list = list(var)
+    np = len(ev_list)
+    partitioned_result = []
+    for (i, val) in enumerate(ev_list):
+      with ops.colocate_with(val):
+        freqs = gen_kv_variable_ops.ev_export_frequency(
+            val._handle, Tkeys=val._invalid_key_type, dtype=val._dtype)
+        partitioned_result.append(
+            filter_key_based_on_values(val, operator, freqs, threshold))
+    return array_ops.concat(partitioned_result, 0)
+
+def selective_lookup_version(var, operator, threshold):
+  if isinstance(var, EmbeddingVariable):
+    versions = gen_kv_variable_ops.ev_export_version(
+        var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
+    return filter_key_based_on_values(var, operator, versions, threshold)
+  elif isinstance(var, variables.PartitionedVariable):
+    ev_list = list(var)
+    np = len(ev_list)
+    partitioned_result = []
+    for (i, val) in enumerate(ev_list):
+      with ops.colocate_with(val):
+        freqs = gen_kv_variable_ops.ev_export_version(
+            val._handle, Tkeys=val._invalid_key_type, dtype=val._dtype)
+        partitioned_result.append(
+            filter_key_based_on_values(val, operator, freqs, threshold))
+    return array_ops.concat(partitioned_result, 0)
+
+def filter_key_based_on_values(var, operator, values, threshold):
+  keys = gen_kv_variable_ops.ev_export_key(
+      var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
+  broadcast_threshold = array_ops.fill(array_ops.shape(values), threshold)
+  compare_result = operator(values, broadcast_threshold)
+  compare_result.set_shape([None])
+  return array_ops.boolean_mask(keys, compare_result)
+
 def lookup_resource(var):
   return gen_kv_variable_ops.kv_resource_lookup_resource(
       var.handle,
@@ -1154,4 +1221,3 @@ def _GatherV1Grad(op, grad):
   values = array_ops.reshape(grad, values_shape)
   indices = array_ops.reshape(indices, size)
   return [ops.IndexedSlices(values, indices, params_shape), None, None, None]
-

@@ -2908,7 +2908,8 @@ tf_kernel_library(
     hdrs = ["kv_variable_ops.h"],
     srcs = ["kv_variable_ops.cc",
             "kv_variable_lookup_ops.cc",
-            "kv_variable_save_restore_ops.cc"],
+            "kv_variable_save_restore_ops.cc",
+            "kv_variable_export_ops.cc"],
     copts = tf_copts() + ["-g"],
     deps = [
         ":bounds_check",
