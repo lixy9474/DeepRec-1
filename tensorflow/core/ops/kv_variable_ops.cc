@@ -882,6 +882,27 @@ REGISTER_OP("EVGetVersion")
     })
     .Doc(R"doc()doc");
 
+REGISTER_OP("KvResourceRemoveFeature")
+    .Input("resource_handle: resource")
+    .Input("ids: Tkeys")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("dtype: type = DT_FLOAT")
+    .SetShapeFn([](InferenceContext* c) {
+      return Status::OK();
+    })
+    .Doc(R"doc()doc");
+
+REGISTER_OP("KvResourceInsertFeature")
+    .Input("resource_handle: resource")
+    .Input("ids: Tkeys")
+    .Input("value: dtype")
+    .Attr("Tkeys: {int64, int32}")
+    .Attr("dtype: type = DT_FLOAT")
+    .SetShapeFn([](InferenceContext* c) {
+      return Status::OK();
+    })
+    .Doc(R"doc()doc");
+
 REGISTER_OP("EVUpdateVersion")
     .Input("resource_handle: resource")
     .Input("ids: Tkeys")

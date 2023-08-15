@@ -3091,7 +3091,8 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
-              initializer=init_ops.ones_initializer(dtypes.float32))
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
       ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
       emb = embedding_ops.embedding_lookup(var, ids)
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -3140,6 +3141,134 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         result = sess.run(evict_ids)
         self.assertAllEqual(result, [1, 2])
     del os.environ["TF_RECORD_VERSION"]
+
+  def testRemoveFeatureWithPartition(self):
+    print("testRemoveFeatureWithPartition")
+    os.environ["TF_RECORD_FREQ"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      evict_ids = kv_variable_ops.selective_lookup_freq(
+          var, kv_variable_ops.LESS, array_ops.constant(3, dtypes.int64))
+      remove_op = kv_variable_ops.remove(var, evict_ids)
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op, feed_dict={ids:[1, 1, 1, 1, 2, 2, 2, 3, 3, 4]})
+        sess.run(remove_op)
+        embs = sess.run(emb, feed_dict={ids:[1,2,3,4]})
+
+        self.assertNotAllEqual(embs[0], [1.0, 1.0, 1.0])
+        self.assertNotAllEqual(embs[1], [1.0, 1.0, 1.0])
+        self.assertAllEqual(embs[2], [1.0, 1.0, 1.0])
+        self.assertAllEqual(embs[3], [1.0, 1.0, 1.0])
+    del os.environ["TF_RECORD_FREQ"]
+
+  def testRemoveFeatureWithoutPartition(self):
+    print("testRemoveFeatureWithoutPartition")
+    os.environ["TF_RECORD_FREQ"] = "1"
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32))
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      evict_ids = kv_variable_ops.selective_lookup_freq(
+          var, kv_variable_ops.LESS, array_ops.constant(3, dtypes.int64))
+      remove_op = kv_variable_ops.remove(var, evict_ids)
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op, feed_dict={ids:[1, 1, 1, 1, 2, 2, 2, 3, 3, 4]})
+        sess.run(remove_op)
+        embs = sess.run(emb, feed_dict={ids:[1,2,3,4]})
+
+        self.assertNotAllEqual(embs[0], [1.0, 1.0, 1.0])
+        self.assertNotAllEqual(embs[1], [1.0, 1.0, 1.0])
+        self.assertAllEqual(embs[2], [1.0, 1.0, 1.0])
+        self.assertAllEqual(embs[3], [1.0, 1.0, 1.0])
+    del os.environ["TF_RECORD_FREQ"]
+
+  def testInsertFeatureWithPartition(self):
+    print("testInsertFeatureWithPartition")
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      insert_ids = math_ops.cast([3, 4, 5, 6], dtype=dtypes.int64)
+      insert_values = array_ops.constant(
+          [[3.0,3.0,3.0],
+           [4.0,4.0,4.0],
+           [5.0,5.0,5.0],
+           [6.0,6.0,6.0]], dtype=dtypes.float32)
+      insrt_op = kv_variable_ops.insert(var, insert_ids, insert_values)
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op, feed_dict={ids:[1, 1, 1, 1, 2, 2, 2]})
+        sess.run(insrt_op)
+        embs = sess.run(emb, feed_dict={ids:[1,2,3,4,5,6]})
+        self.assertAllEqual(embs[2], [3.0, 3.0, 3.0])
+        self.assertAllEqual(embs[3], [4.0, 4.0, 4.0])
+        self.assertAllEqual(embs[4], [5.0, 5.0, 5.0])
+        self.assertAllEqual(embs[5], [6.0, 6.0, 6.0])
+
+  def testInsertFeatureWithoutPartition(self):
+    print("testInsertFeatureWithoutPartition")
+    with ops.device("/cpu:0"):
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32))
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      insert_ids = math_ops.cast([3, 4, 5, 6], dtype=dtypes.int64)
+      insert_values = array_ops.constant(
+          [[3.0,3.0,3.0],
+           [4.0,4.0,4.0],
+           [5.0,5.0,5.0],
+           [6.0,6.0,6.0]], dtype=dtypes.float32)
+      insrt_op = kv_variable_ops.insert(var, insert_ids, insert_values)
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op, feed_dict={ids:[1, 1, 1, 1, 2, 2, 2]})
+        sess.run(insrt_op)
+        embs = sess.run(emb, feed_dict={ids:[1,2,3,4,5,6]})
+        self.assertAllEqual(embs[2], [3.0, 3.0, 3.0])
+        self.assertAllEqual(embs[3], [4.0, 4.0, 4.0])
+        self.assertAllEqual(embs[4], [5.0, 5.0, 5.0])
+        self.assertAllEqual(embs[5], [6.0, 6.0, 6.0])
 
 if __name__ == "__main__":
   googletest.main()

@@ -279,7 +279,7 @@ class SSDHashKV : public KVInterface<K, V> {
 
   Status Lookup(K key, void** value_ptr) override {
     auto iter = hash_map_.find_wait_free(key);
-    if (iter.first == EMPTY_KEY) {
+    if (iter.first == EMPTY_KEY || iter.second->invalid_) {
       return errors::NotFound("Unable to find Key: ", key, " in SSDHashKV.");
     } else {
       void* val = feat_desc_->Allocate();
@@ -299,7 +299,7 @@ class SSDHashKV : public KVInterface<K, V> {
 
   Status Contains(K key) override {
     auto iter = hash_map_.find_wait_free(key);
-    if (iter.first == EMPTY_KEY) {
+    if (iter.first == EMPTY_KEY || iter.second->invalid_) {
       return errors::NotFound("Unable to find Key: ", key, " in SSDHashKV.");
     } else {
       return Status::OK();
@@ -341,6 +341,14 @@ class SSDHashKV : public KVInterface<K, V> {
     } else {
       return errors::NotFound("Unable to find Key: ",
           key, " in SSDHashKV.");
+    }
+  }
+
+  Status RemoveAndDeallocate(K key) override {
+    auto iter = hash_map_.find_wait_free(key);
+    if (iter.first != EMPTY_KEY || iter.second->invalid_) {
+      __sync_bool_compare_and_swap(&(iter.second->invalid_), false, true);
+      return Status::OK();
     }
   }
 

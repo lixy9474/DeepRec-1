@@ -143,7 +143,7 @@ class SingleTierStorage : public Storage<K, V> {
   }
  
   Status Remove(K key) override {
-    return kv_->Remove(key);
+    return kv_->RemoveAndDeallocate(key);
   }
 
   int64 Size() const override {

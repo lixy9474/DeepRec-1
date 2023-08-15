@@ -767,4 +767,107 @@ TF_CALL_GPU_NUMBER_TYPES(REGISTER_KERNELS_ALL)
 #undef REGISTER_KERNELS
 #endif  // GOOGLE_CUDA
 
+template <typename Device, typename TKey, typename TValue>
+class KvResourceRemoveFeatureOp : public OpKernel {
+ public:
+  explicit KvResourceRemoveFeatureOp(OpKernelConstruction* c) : OpKernel(c) {}
+
+  void Compute(OpKernelContext* ctx) override {
+    EmbeddingVar<TKey, TValue>* ev = nullptr;
+    OP_REQUIRES_OK(ctx,
+                   LookupResource(ctx, HandleFromInput(ctx, 0), &ev));
+    core::ScopedUnref unref_me(ev);
+    const Tensor& indices = ctx->input(1);
+    auto indices_flat = indices.flat<TKey>();
+
+    if (!ev->IsSingleHbm()) {
+      EmbeddingVarContext<Device> ev_ctx(ctx);
+      ev->RemoveFeatures(
+          ev_ctx, (TKey*)indices.data(), indices.NumElements());
+    }
+  }
+};
+
+#define REGISTER_KERNELS(ktype, vtype)                          \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceRemoveFeature")       \
+                            .Device(DEVICE_CPU)                 \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("dtype"),    \
+                          KvResourceRemoveFeatureOp<CPUDevice, ktype, vtype>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type)                                 \
+  REGISTER_KERNELS(int64, type)
+TF_CALL_FLOAT_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+
+#if GOOGLE_CUDA
+#define REGISTER_KERNELS(ktype, vtype)                          \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceRemoveFeature")       \
+                            .Device(DEVICE_GPU)                 \
+                            .HostMemory("ids")                  \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("dtype"),    \
+                          KvResourceRemoveFeatureOp<GPUDevice, ktype, vtype>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type)                                 \
+  REGISTER_KERNELS(int64, type)
+TF_CALL_GPU_NUMBER_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+#endif  // GOOGLE_CUDA
+
+template <typename Device, typename TKey, typename TValue>
+class KvResourceInsertFeatureOp : public OpKernel {
+ public:
+  explicit KvResourceInsertFeatureOp(OpKernelConstruction* c) : OpKernel(c) {}
+
+  void Compute(OpKernelContext* ctx) override {
+    EmbeddingVar<TKey, TValue>* ev = nullptr;
+    OP_REQUIRES_OK(ctx,
+                   LookupResource(ctx, HandleFromInput(ctx, 0), &ev));
+    core::ScopedUnref unref_me(ev);
+    const Tensor& indices = ctx->input(1);
+    auto indices_flat = indices.flat<TKey>();
+    const Tensor& value = ctx->input(2);
+
+    if (!ev->IsSingleHbm()) {
+      EmbeddingVarContext<Device> ev_ctx(ctx);
+      ev->InsertFeatures(
+          ev_ctx, (TKey*)indices.data(), indices.NumElements(),
+          (TValue*)value.data());
+    }
+  }
+};
+
+#define REGISTER_KERNELS(ktype, vtype)                          \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceInsertFeature")       \
+                            .Device(DEVICE_CPU)                 \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("dtype"),    \
+                          KvResourceInsertFeatureOp<CPUDevice, ktype, vtype>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type)                                 \
+  REGISTER_KERNELS(int64, type)
+TF_CALL_FLOAT_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+
+#if GOOGLE_CUDA
+#define REGISTER_KERNELS(ktype, vtype)                          \
+  REGISTER_KERNEL_BUILDER(Name("KvResourceInsertFeature")       \
+                            .Device(DEVICE_GPU)                 \
+                            .HostMemory("ids")                  \
+                            .HostMemory("output")               \
+                            .TypeConstraint<ktype>("Tkeys")     \
+                            .TypeConstraint<vtype>("dtype"),    \
+                          KvResourceInsertFeatureOp<GPUDevice, ktype, vtype>);
+#define REGISTER_KERNELS_ALL(type)                              \
+  REGISTER_KERNELS(int32, type)                                 \
+  REGISTER_KERNELS(int64, type)
+TF_CALL_GPU_NUMBER_TYPES(REGISTER_KERNELS_ALL)
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
+#endif  // GOOGLE_CUDA
+
 }  // namespace tensorflow

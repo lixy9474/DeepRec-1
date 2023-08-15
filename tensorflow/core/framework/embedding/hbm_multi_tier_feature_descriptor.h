@@ -103,6 +103,16 @@ class HbmMultiTierFeatureDescriptorImpl
       EventMgr* event_mgr,
       const Eigen::GpuDevice& gpu_device);
 
+  template <class K>
+  void SetValues(
+      void** value_ptrs,
+      int num_of_ptrs,
+      int emb_index,
+      int value_len,
+      se::Stream* compute_stream,
+      EventMgr* event_mgr,
+      const Eigen::GpuDevice& gpu_device);
+
   int data_bytes() override {
     return dram_alloc_bytes_;
   }

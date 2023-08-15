@@ -689,6 +689,71 @@ class EmbeddingVar : public ResourceBase {
           200, compute_l2_weight);
   }
 
+  template<typename Device>
+  void RemoveFeatures(const EmbeddingVarContext<Device>& context,
+                      K* indices, int64 num_of_indices) {
+    auto remove_worker = [this, indices]
+        (int64 start, int64 end) {
+      for (int64 i = start; i < end; i++) {
+        storage_->Remove(indices[i]);
+      }
+    };
+    auto worker_threads = context.worker_threads;
+    Shard(worker_threads->num_threads,
+          worker_threads->workers, num_of_indices,
+          1000, remove_worker);
+  }
+
+  void InsertFeatures(const EmbeddingVarContext<CPUDevice>& context,
+                      K* indices, int64 num_of_indices,
+                      V* value) {
+    auto create_worker = [this, indices, value]
+        (int64 start, int64 end) {
+      for (int64 i = start; i < end; i++) {
+        void* ptr = feat_desc_->Allocate();
+        feat_desc_->SetDefaultValue(ptr, indices[i]);
+        feat_desc_->SetValue(ptr, emb_config_.emb_index,
+                             value + i * value_len_);
+        storage_->Insert(indices[i], &ptr);
+      }
+    };
+    auto worker_threads = context.worker_threads;
+    Shard(worker_threads->num_threads,
+          worker_threads->workers, num_of_indices,
+          1000, create_worker);
+  }
+
+#if GOOGLE_CUDA
+  void InsertFeatures(const EmbeddingVarContext<GPUDevice>& context,
+                      K* indices, int64 num_of_indices,
+                      V* value) {
+    std::vector<void*> value_ptrs(num_of_indices);
+    std::list<int64> init_cursor;
+    for (int64 i = 0; i < num_of_indices; i++) {
+      value_ptrs[i] = feat_desc_->Allocate();
+      inti_cursor.emplace_back(i);
+    }
+    feat_desc_->SetDefaultValues(
+        indices, inti_cursor, value_ptrs,
+        context.compute_stream, context.event_mgr,
+        context.device);
+    feat_desc_->SetValues(value_ptrs, value_ptrs.size(),
+                          emb_config_.emb_index, value,
+                          value_len_, context.compute_stream,
+                          context.event_mgr, context.device);
+    auto create_worker = [this, indices, value_ptrs]
+        (int64 start, int64 end) {
+      for (int64 i = start; i < end; i++) {
+        storage_->Insert(indices[i], &value_ptrs[i]);
+      }
+    };
+    auto worker_threads = context.worker_threads;
+    Shard(worker_threads->num_threads,
+          worker_threads->workers, num_of_indices,
+          1000, create_worker);
+  }
+#endif //GOOGLE_CUDA
+
  protected:
   ~EmbeddingVar() override {
     // When dynamic dimension embedding is used,

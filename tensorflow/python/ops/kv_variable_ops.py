@@ -1081,6 +1081,43 @@ def update_version(var, ids, global_step):
         partitioned_result.append(update_op)
     return partitioned_result
 
+def remove(var, ids):
+  if isinstance(var, EmbeddingVariable):
+    return gen_kv_variable_ops.kv_resource_remove_feature(
+        var._handle, ids, dtype=var._dtype)
+  elif isinstance(var, variables.PartitionedVariable):
+    ev_list = list(var)
+    np = len(ev_list)
+    partitioned_result = []
+    gather_ids, pindices = dynamic_partition(ids, np)
+    for (i, val) in enumerate(ev_list):
+      with ops.colocate_with(val):
+        remove_op = gen_kv_variable_ops.kv_resource_remove_feature(
+            val._handle, gather_ids[i], dtype=var._dtype)
+        partitioned_result.append(remove_op)
+    return partitioned_result
+
+def insert(var, ids, values):
+  if isinstance(var, EmbeddingVariable):
+    return gen_kv_variable_ops.kv_resource_insert_feature(
+        var._handle, ids, values)
+  elif isinstance(var, variables.PartitionedVariable):
+    ev_list = list(var)
+    np = len(ev_list)
+    partitioned_result = []
+    partitioned_result = []
+    p_assignments = ids % 1000 % np
+    p_assignments = math_ops.cast(p_assignments, dtypes.int32)
+    from tensorflow.python.ops import data_flow_ops
+    insert_ids = data_flow_ops.dynamic_partition(ids, p_assignments, np)
+    insert_values = data_flow_ops.dynamic_partition(values, p_assignments, np)
+    for (i, val) in enumerate(ev_list):
+      with ops.colocate_with(val):
+        insert_op = gen_kv_variable_ops.kv_resource_insert_feature(
+            val._handle, insert_ids[i], insert_values[i])
+        partitioned_result.append(insert_op)
+    return partitioned_result
+
 EQUAL = lambda x,y: math_ops.equal(x, y)
 NOE_EQUAL = lambda x,y: math_ops.not_equal(x, y)
 GREATER = lambda x,y: math_ops.greater(x, y)

@@ -88,6 +88,19 @@ class LocklessHashMap : public KVInterface<K, V> {
     }
   }
 
+  //Remove from KV and deallocate value
+  Status RemoveAndDeallocate(K key) override {
+    auto iter = hash_map_.find_wait_free(key);
+    if (iter.first != LocklessHashMap<K, V>::EMPTY_KEY_) {
+      AppendToValuePtrQueue(iter.second);
+      Remove(key);
+    } else {
+      LOG(WARNING)<< "Unable to find Key: "
+                  << key<<" in LocklessHashMap.";
+    }
+    return Status::OK();
+  }
+
   Status Commit(K key, const void* value_ptr) override {
     auto iter = hash_map_.insert_lockless(std::move(
         std::pair<K, void*>(key,

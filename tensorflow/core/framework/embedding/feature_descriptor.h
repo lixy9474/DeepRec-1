@@ -152,6 +152,20 @@ class FeatureDescriptor {
         keys, init_cursor, value_ptrs,
         compute_stream, event_mgr, gpu_device);
   }
+
+  template <class K>
+  void SetValues(
+      void** value_ptrs,
+      int num_of_ptrs,
+      int emb_index,
+      int value_len,
+      se::Stream* compute_stream,
+      EventMgr* event_mgr,
+      const Eigen::GpuDevice& gpu_device) {
+    reinterpret_cast<HbmMultiTierFeatureDescriptorImpl<V>*>(feat_desc_impl_.get())->SetValues(
+        value_ptrs, num_of_ptrs, emb_index, value_len,
+        compute_stream, event_mgr, gpu_device);
+  }
 #endif
 
   void SetAllocator(Allocator* alloc) {

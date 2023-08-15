@@ -188,6 +188,55 @@ TF_CALL_FLOAT_TYPES(REGISTER_KERNELS_CPU)
 #undef REGISTER_KERNELS_CPU
 #undef REGISTER_KERNELS_ALL
 #undef REGISTER_KERNELS
+
+template <class TValue>
+template <class K>
+void HbmMultiTierFeatureDescriptorImpl<TValue>::SetValues(
+    void** value_ptrs, int num_of_ptrs,
+    int emb_index, int valule_len,
+    se::Stream* compute_stream, EventMgr* event_mgr,
+    const Eigen::GpuDevice& gpu_device) {
+  if (num_of_ptrs > 0) {
+    TValue** value_address = nullptr;
+    value_address = TypedAllocator::Allocate<TValue*>(cpu_allocator(), num_of_ptrs * 2,
+                                                      AllocationAttributes());
+    TValue** input_value_address = value_address + num_of_ptrs;
+    TValue** dev_value_address = nullptr;
+    dev_value_address =
+        TypedAllocator::Allocate<TValue*>(hbm_alloc_, num_of_ptrs * 2, AllocationAttributes());
+    TValue** dev_input_value_address = dev_value_address + num_of_ptrs;
+    for (int64 i = 0; i < num_of_ptrs; i++) {
+      value_address[i] = GetEmbedding(value_ptrs[i], emb_index);
+      input_value_address[i] = value + i * value_len_;
+    }
+    DeviceMemoryBase gpu_dst_ptr(dev_value_address, num_of_ptrs * 2 * sizeof(TValue*));
+    compute_stream->ThenMemcpy(&gpu_dst_ptr, value_address,
+                               num_of_ptrs * 2 * sizeof(TValue*));
+    int block_dim = 128;
+    TF_CHECK_OK(GpuLaunchKernel(
+        embedding::CopyEmbedding<TValue>,
+        (num_of_ptrs * value_len + block_dim - 1) / block_dim,
+        block_dim, 0, gpu_device.stream(), dev_input_value_address,
+        dev_value_address, value_len, num_of_ptrs));
+    SyncWithEventMgr(compute_stream, event_mgr);
+
+    TypedAllocator::Deallocate(hbm_alloc_, dev_value_address, total * 2);
+    TypedAllocator::Deallocate(cpu_allocator(), value_address, total * 2);
+  }
+}
+
+#define REGISTER_KERNELS(ktype, vtype)                                        \
+  template void HbmMultiTierFeatureDescriptorImpl<vtype>::SetValues(     \
+      void**, int, int, int\
+      se::Stream*, EventMgr*, const Eigen::GpuDevice& gpu_device);
+#define REGISTER_KERNELS_ALL(type) \
+  REGISTER_KERNELS(int32, type);   \
+  REGISTER_KERNELS(int64, type)
+#define REGISTER_KERNELS_CPU(type) REGISTER_KERNELS_ALL(type)
+TF_CALL_FLOAT_TYPES(REGISTER_KERNELS_CPU)
+#undef REGISTER_KERNELS_CPU
+#undef REGISTER_KERNELS_ALL
+#undef REGISTER_KERNELS
 } // namespace embedding
 } // namespace tensorflow
 

@@ -43,6 +43,9 @@ class KVInterface {
   virtual Status Contains(K key) = 0;
   virtual Status Insert(K key, const void* value_ptr) = 0;
   virtual Status Remove(K key) = 0;
+  virtual Status RemoveAndDeallocate(K key) {
+    LOG(FATAL)<<"Unimplemented for RemoveAndDeallocate in KVInterface.";
+  }
 
   virtual Status BatchLookup(const K* keys, size_t size,
                              void** value_ptrs) {
