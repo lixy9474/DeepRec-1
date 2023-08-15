@@ -226,12 +226,17 @@ class BaseSaverBuilder(object):
         tensor_slices.append("")
         has_ev = True
         break
+    evict_ops = []
 
     for saveable in saveables:
       if isinstance(saveable, BaseSaverBuilder.EmbeddingVariableSaveable):
         ev_names.append(saveable.name)
         ev_resources.append(saveable.resource)
         ev_key_types.append(saveable.key_type)
+        if saveable.var.custom_feature_evict != None:
+          evict_ids = saveable.var.custom_feature_evict.get_evict_ids(saveable.var)
+          evict_op = kv_variable_ops.remove(saveable.var, evict_ids)
+          evict_ops.append(evict_op)
         continue
       for spec in saveable.specs:
         tensor_names.append(spec.name)
@@ -246,9 +251,10 @@ class BaseSaverBuilder(object):
     elif self._write_version == saver_pb2.SaverDef.V2:
       # "filename_tensor" is interpreted *NOT AS A FILENAME*, but as a prefix
       # of a V2 checkpoint: e.g. "/fs/train/ckpt-<step>/tmp/worker<i>-<step>".
-      return io_ops.save_v3(filename_tensor, tensor_names, tensor_slices,
-                            ev_names, ev_resources, tensors,
-                            ev_key_types, has_ev)
+      with ops.control_dependencies(evict_ops):
+        return io_ops.save_v3(filename_tensor, tensor_names, tensor_slices,
+                              ev_names, ev_resources, tensors,
+                              ev_key_types, has_ev)
     else:
       raise RuntimeError("Unexpected write_version: " + self._write_version)
 

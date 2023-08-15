@@ -3270,5 +3270,48 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         self.assertAllEqual(embs[4], [5.0, 5.0, 5.0])
         self.assertAllEqual(embs[5], [6.0, 6.0, 6.0])
 
+  def testCustomFeatureEviction(self):
+    print("testCustomFeatureEviction")
+    class FreqEvict(kv_variable_ops.CustomEvictOption):
+      def get_evict_ids(self, var):
+        return kv_variable_ops.selective_lookup_freq(
+            var, kv_variable_ops.LESS,
+            array_ops.constant(3, dtype=dtypes.int64))
+    checkpoint_directory = self.get_temp_dir()
+    model_path = os.path.join(checkpoint_directory, "model-custom.ckpt")
+    os.environ["TF_RECORD_FREQ"] = "1"
+
+    with ops.device("/cpu:0"):
+      evict_option = FreqEvict()
+      ev_option = variables.EmbeddingVariableOption(evict_option=evict_option)
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              ev_option=ev_option)
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad.AdagradOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      saver = saver_module.Saver()
+      init = variables.global_variables_initializer()
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run(train_op, feed_dict={ids:[1, 1, 1, 1, 2, 2, 2, 3, 3, 4]})
+        saver.save(sess, model_path)
+      for name, shape in checkpoint_utils.list_variables(model_path):
+        if name == "var_1-keys":
+          self.assertEqual(shape[0], 2)
+          value = checkpoint_utils.load_variable(model_path, name)
+          self.assertAllEqual(value, [1, 2])
+        if name == "var_1-freqs":
+          self.assertEqual(shape[0], 2)
+          value = checkpoint_utils.load_variable(model_path, name)
+          self.assertAllEqual(value, [4, 3])
+    del os.environ["TF_RECORD_FREQ"]
+
 if __name__ == "__main__":
   googletest.main()

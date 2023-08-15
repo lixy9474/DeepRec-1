@@ -324,7 +324,8 @@ class EmbeddingVariableConfig(object):
                storage_cache_strategy=config_pb2.CacheStrategy.LFU,
                layout=None,
                default_value_dim=4096,
-               default_value_no_permission=.0):
+               default_value_no_permission=.0,
+               custom_feature_evict=None):
     self.steps_to_live = steps_to_live
     self.steps_to_live_l2reg = steps_to_live_l2reg
     self.l2reg_theta = l2reg_theta
@@ -349,6 +350,7 @@ class EmbeddingVariableConfig(object):
     self.layout = layout
     self.default_value_dim = default_value_dim
     self.default_value_no_permission = default_value_no_permission
+    self.custom_feature_evict = custom_feature_evict
 
   def reveal(self):
     if self.steps_to_live is None:

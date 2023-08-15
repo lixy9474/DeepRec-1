@@ -299,6 +299,11 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
       self._is_primary = True
     else:
       self._is_primary = False
+
+    if self._is_primary:
+      self.custom_feature_evict = evconfig.custom_feature_evict
+    else:
+      self.custom_feature_evict = None
     with ops.control_dependencies(None):
       with ops.name_scope(name, "Variable", []
                           if init_from_fn else [initial_value]) as name:
@@ -560,6 +565,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     self._record_freq = init_op.get_attr("record_freq")
     self._record_version = init_op.get_attr("record_version")
     self._storage_cache_strategy = config_pb2.CacheStrategy.LFU
+    self.custom_feature_evict = None
     if cache_op:
       self._storage_cache_strategy = cache_op.get_attr("cache_strategy")
     if self._slot_index == 0 and self._emb_index == 0:
@@ -1258,3 +1264,7 @@ def _GatherV1Grad(op, grad):
   values = array_ops.reshape(grad, values_shape)
   indices = array_ops.reshape(indices, size)
   return [ops.IndexedSlices(values, indices, params_shape), None, None, None]
+
+class CustomEvictOption(object):
+  def get_evict_ids(self, var):
+    raise NotImplementeError

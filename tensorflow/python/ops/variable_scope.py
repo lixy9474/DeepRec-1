@@ -2189,6 +2189,11 @@ def get_embedding_variable(name,
     l2_weight_threshold = -1.0
   if steps_to_live != None and l2_weight_threshold > 0:
       raise ValueError("step_to_live and l2_weight_threshold can't be enabled at same time.")
+  custom_feature_evict = None
+  if ev_option.evict != None and \
+     isinstance(ev_option.evict, kv_variable_ops.CustomEvictOption):
+    custom_feature_evict = ev_option.evict
+
   return get_variable_scope().get_embedding_variable(
       _get_default_variable_store(), name, shape=embedding_dim, dtype=value_dtype,
       initializer=initializer, regularizer=regularizer, trainable=trainable,
@@ -2206,7 +2211,8 @@ def get_embedding_variable(name,
         storage_cache_strategy = ev_option.storage_option.cache_strategy,
         layout = ev_option.storage_option.layout,
         default_value_dim=ev_option.init.default_value_dim,
-        default_value_no_permission=ev_option.init.default_value_no_permission),
+        default_value_no_permission=ev_option.init.default_value_no_permission,
+        custom_feature_evict=custom_feature_evict),
         ht_partition_num=ev_option.ht_partition_num)
 
 
@@ -2254,6 +2260,11 @@ def get_embedding_variable_internal(name,
     l2_weight_threshold = -1.0
   if steps_to_live != None and l2_weight_threshold > 0:
       raise ValueError("step_to_live and l2_weight_threshold can't be enabled at same time.")
+  custom_feature_evict = None
+  if ev_option.evict != None and \
+     isinstance(ev_option.evict, kv_variable_ops.CustomEvictOption):
+    custom_feature_evict = ev_option.evict
+
   return get_variable_scope().get_embedding_variable(
       _get_default_variable_store(), name, shape=embedding_dim, dtype=value_dtype,
       initializer=initializer, regularizer=regularizer, trainable=trainable,
@@ -2272,7 +2283,8 @@ def get_embedding_variable_internal(name,
         storage_cache_strategy = ev_option.storage_option.cache_strategy,
         layout = ev_option.storage_option.layout,
         default_value_dim=ev_option.init.default_value_dim,
-        default_value_no_permission=ev_option.init.default_value_no_permission),
+        default_value_no_permission=ev_option.init.default_value_no_permission,
+        custom_feature_evict=custom_feature_evict),
       ht_partition_num=ev_option.ht_partition_num)
 
 
