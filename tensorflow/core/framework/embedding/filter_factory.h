@@ -16,7 +16,6 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_FILTER_FACTORY_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_FILTER_FACTORY_H_
 
-#include "tensorflow/core/framework/embedding/bloom_filter_policy.h"
 #include "tensorflow/core/framework/embedding/counter_filter_policy.h"
 #include "tensorflow/core/framework/embedding/embedding_config.h"
 #include "tensorflow/core/framework/embedding/filter_policy.h"
@@ -36,13 +35,8 @@ class FilterFactory {
       embedding::Storage<K, V>* storage,
       embedding::FeatureDescriptor<V>* feat_desc) {
     if (config.filter_freq > 0) {
-      if (config.kHashFunc != 0) {
-        return new BloomFilterPolicy<K, V, EV>(
-            config, ev, feat_desc);
-      } else {
-        return new CounterFilterPolicy<K, V, EV>(
-            config, ev, feat_desc);
-      }
+      return new CounterFilterPolicy<K, V, EV>(
+          config, ev, feat_desc);
     } else {
       return new NullableFilterPolicy<K, V, EV>(
           config, ev, storage, feat_desc);

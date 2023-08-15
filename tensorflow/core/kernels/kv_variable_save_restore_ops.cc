@@ -156,9 +156,7 @@ class KvResourceImportV2Op: public AsyncOpKernel {
                 block_num_, slot_num_, opname + "-primary",
                 steps_to_live_, filter_freq_,
                 max_freq_, l2_weight_threshold_,
-                max_element_size_,
-                false_positive_probability_,
-                counter_type_, default_value_dim_,
+                default_value_dim_,
                 default_value_no_permission_,
                 record_freq_, record_version_);
             Allocator* alloc_for_ev =
@@ -202,9 +200,7 @@ class KvResourceImportV2Op: public AsyncOpKernel {
                 primary_emb_index, block_num_, slot_num_,
                 opname + "-primary", steps_to_live_, filter_freq_,
                 max_freq_, l2_weight_threshold_,
-                max_element_size_,
-                false_positive_probability_,
-                counter_type_, 0, record_freq_, record_version_);
+                0, record_freq_, record_version_);
             Allocator* alloc_for_ev =
                 (device_type_str_ == "CPU") ? ev_allocator() : allocator;
             auto feat_desc = new embedding::FeatureDescriptor<TValue>(
@@ -239,9 +235,7 @@ class KvResourceImportV2Op: public AsyncOpKernel {
                 emb_index_ + block_num_ * slot_index_,
                 emb_index_, block_num_, slot_num_, opname,
                 steps_to_live_, filter_freq_, max_freq_,
-                l2_weight_threshold_, max_element_size_,
-                false_positive_probability_,
-                counter_type_, default_value_dim_,
+                l2_weight_threshold_, default_value_dim_,
                 default_value_no_permission_,
                 record_freq_, record_version_);
             Allocator* alloc_for_ev =

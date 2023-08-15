@@ -2194,6 +2194,11 @@ def get_embedding_variable(name,
      isinstance(ev_option.evict, kv_variable_ops.CustomEvictOption):
     custom_feature_evict = ev_option.evict
 
+  custom_feature_filter = None
+  if ev_option.filter_strategy != None and \
+     isinstance(ev_option.filter_strategy, variables.CustomFilterOption):
+    custom_feature_filter = ev_option.filter_strategy
+
   return get_variable_scope().get_embedding_variable(
       _get_default_variable_store(), name, shape=embedding_dim, dtype=value_dtype,
       initializer=initializer, regularizer=regularizer, trainable=trainable,
@@ -2212,7 +2217,8 @@ def get_embedding_variable(name,
         layout = ev_option.storage_option.layout,
         default_value_dim=ev_option.init.default_value_dim,
         default_value_no_permission=ev_option.init.default_value_no_permission,
-        custom_feature_evict=custom_feature_evict),
+        custom_feature_evict=custom_feature_evict,
+        custom_feature_filter=custom_feature_filter),
         ht_partition_num=ev_option.ht_partition_num)
 
 
@@ -2265,6 +2271,11 @@ def get_embedding_variable_internal(name,
      isinstance(ev_option.evict, kv_variable_ops.CustomEvictOption):
     custom_feature_evict = ev_option.evict
 
+  custom_feature_filter = None
+  if ev_option.filter_strategy != None and \
+     isinstance(ev_option.filter_strategy, variables.CustomFilterOption):
+    custom_feature_filter = ev_option.filter_strategy
+
   return get_variable_scope().get_embedding_variable(
       _get_default_variable_store(), name, shape=embedding_dim, dtype=value_dtype,
       initializer=initializer, regularizer=regularizer, trainable=trainable,
@@ -2284,7 +2295,8 @@ def get_embedding_variable_internal(name,
         layout = ev_option.storage_option.layout,
         default_value_dim=ev_option.init.default_value_dim,
         default_value_no_permission=ev_option.init.default_value_no_permission,
-        custom_feature_evict=custom_feature_evict),
+        custom_feature_evict=custom_feature_evict,
+        custom_feature_filter=custom_feature_filter),
       ht_partition_num=ev_option.ht_partition_num)
 
 

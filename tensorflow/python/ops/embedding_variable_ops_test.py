@@ -871,136 +871,6 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       print(sess.run([emb, train_op,loss]))
       print(sess.run([emb, train_op,loss]))
 
-  def testEmbeddingVariableForBloomFilterInt64(self):
-    print("testEmbeddingVariableForBloomFilterInt64")
-    var = variable_scope.get_embedding_variable("var_1",
-            embedding_dim = 3,
-            initializer=init_ops.ones_initializer(dtypes.float32),
-            ev_option = variables.EmbeddingVariableOption(filter_option=variables.CBFFilter(
-                                      filter_freq=3,
-                                      max_element_size = 5,
-                                      false_positive_probability = 0.01)),
-            partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
-    emb = embedding_ops.embedding_lookup(var, math_ops.cast([1], dtypes.int64))
-    fun = math_ops.multiply(emb, 2.0, name='multiply')
-    loss = math_ops.reduce_sum(fun, name='reduce_sum')
-    gs = training_util.get_or_create_global_step()
-    opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
-    g_v = opt.compute_gradients(loss)
-    train_op = opt.apply_gradients(g_v)
-    init = variables.global_variables_initializer()
-    with self.test_session() as sess:
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
-      sess.run([init])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertEqual(val, .0)
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertNotEqual(val, 1.0)
-
-  def testEmbeddingVariableForBloomFilterInt32(self):
-    print("testEmbeddingVariableForBloomFilterInt32")
-    var = variable_scope.get_embedding_variable("var_1",
-            embedding_dim = 3,
-            initializer=init_ops.ones_initializer(dtypes.float32),
-            ev_option = variables.EmbeddingVariableOption(filter_option=variables.CBFFilter(
-                                      filter_freq=3,
-                                      max_element_size = 5,
-                                      false_positive_probability = 0.01,
-                                      counter_type = dtypes.uint32
-                                    )),
-            partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
-    emb = embedding_ops.embedding_lookup(var, math_ops.cast([1], dtypes.int64))
-    fun = math_ops.multiply(emb, 2.0, name='multiply')
-    loss = math_ops.reduce_sum(fun, name='reduce_sum')
-    gs = training_util.get_or_create_global_step()
-    opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
-    g_v = opt.compute_gradients(loss)
-    train_op = opt.apply_gradients(g_v)
-    init = variables.global_variables_initializer()
-    with self.test_session() as sess:
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
-      sess.run([init])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertEqual(val, .0)
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertNotEqual(val, 1.0)
-
-  def testEmbeddingVariableForBloomFilterInt8(self):
-    print("testEmbeddingVariableForBloomFilterInt8")
-    var = variable_scope.get_embedding_variable("var_1",
-            embedding_dim = 3,
-            initializer=init_ops.ones_initializer(dtypes.float32),
-            ev_option = variables.EmbeddingVariableOption(filter_option=variables.CBFFilter(
-                                      filter_freq=3,
-                                      max_element_size = 5,
-                                      false_positive_probability = 0.01,
-                                      counter_type = dtypes.uint8
-                                    )),
-            partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
-    emb = embedding_ops.embedding_lookup(var, math_ops.cast([1], dtypes.int64))
-    fun = math_ops.multiply(emb, 2.0, name='multiply')
-    loss = math_ops.reduce_sum(fun, name='reduce_sum')
-    gs = training_util.get_or_create_global_step()
-    opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
-    g_v = opt.compute_gradients(loss)
-    train_op = opt.apply_gradients(g_v)
-    init = variables.global_variables_initializer()
-    with self.test_session() as sess:
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
-      sess.run([init])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertEqual(val, .0)
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertNotEqual(val, 1.0)
-
-  def testEmbeddingVariableForBloomFilterInt16(self):
-    print("testEmbeddingVariableForBloomFilterInt16")
-    var = variable_scope.get_embedding_variable("var_1",
-            embedding_dim = 3,
-            initializer=init_ops.ones_initializer(dtypes.float32),
-            ev_option = variables.EmbeddingVariableOption(filter_option=variables.CBFFilter(
-                                      filter_freq=3,
-                                      max_element_size = 5,
-                                      false_positive_probability = 0.01,
-                                      counter_type = dtypes.uint16
-                                    )),
-            partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
-    emb = embedding_ops.embedding_lookup(var, math_ops.cast([1], dtypes.int64))
-    fun = math_ops.multiply(emb, 2.0, name='multiply')
-    loss = math_ops.reduce_sum(fun, name='reduce_sum')
-    gs = training_util.get_or_create_global_step()
-    opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
-    g_v = opt.compute_gradients(loss)
-    train_op = opt.apply_gradients(g_v)
-    init = variables.global_variables_initializer()
-    with self.test_session() as sess:
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
-      sess.run([init])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertEqual(val, .0)
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertNotEqual(val, 1.0)
-
   def testEmbeddingVariableForAdagradDecayFilter(self):
     print("testEmbeddingVariableForAdagradDecayFilter")
     self._CounterFilterTestTemplate("AdagradDecay")
@@ -1371,43 +1241,6 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       init_opt = variables.InitializerOption(initializer=init_ops.glorot_uniform_initializer(seed = 1),
                                          default_value_dim=8)
       ev_option = variables.EmbeddingVariableOption(init_option=init_opt, filter_option=counter_filter_option)
-      emb_var = variable_scope.get_embedding_variable("emb_var", embedding_dim=3,
-                                                       ev_option=ev_option)
-      var_emb = embedding_ops.embedding_lookup(var, math_ops.cast([0,1,2,3,4,5,6,7], dtypes.int64))
-      emb_emb = embedding_ops.embedding_lookup(emb_var, math_ops.cast([3], dtypes.int64))
-      fun = math_ops.multiply(emb_emb, 0.0, name='multiply')
-      loss = math_ops.reduce_sum(fun, name='reduce_sum')
-      opt = adagrad.AdagradOptimizer(0.1)
-      g_v = opt.compute_gradients(loss)
-      train_op = opt.apply_gradients(g_v)
-      init = variables.global_variables_initializer()
-      with self.test_session(graph=g) as sess:
-        sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
-        sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
-        sess.run([init])
-        emb1 = np.zeros([8,3])
-        emb2, _ = sess.run([emb_emb, train_op])
-        self.assertListEqual(emb1.tolist()[3], emb2.tolist()[0])
-        emb2, _ = sess.run([emb_emb, train_op])
-        self.assertListEqual(emb1.tolist()[3], emb2.tolist()[0])
-        emb2, _ = sess.run([emb_emb, train_op])
-        self.assertListEqual(emb1.tolist()[3], emb2.tolist()[0])
-        emb1 = sess.run(var_emb)
-        emb2 = sess.run(emb_emb)
-        self.assertListEqual(emb1.tolist()[3], emb2.tolist()[0])
-
-  def testEVInitializerWithBloomFeatureFilter(self):
-    print("testEVInitializerWithBloomFeatureFilter")
-    with ops.Graph().as_default() as g, ops.device('/cpu:0'):
-      var = variable_scope.get_variable("var", shape=[8,3],
-                                        initializer=init_ops.glorot_uniform_initializer(seed = 1))
-      bloom_filter_option=variables.CBFFilter(
-                                      filter_freq=3,
-                                      max_element_size = 10,
-                                      false_positive_probability = 0.01)
-      init_opt = variables.InitializerOption(initializer=init_ops.glorot_uniform_initializer(seed = 1),
-                                         default_value_dim=8)
-      ev_option = variables.EmbeddingVariableOption(init_option=init_opt, filter_option=bloom_filter_option)
       emb_var = variable_scope.get_embedding_variable("emb_var", embedding_dim=3,
                                                        ev_option=ev_option)
       var_emb = embedding_ops.embedding_lookup(var, math_ops.cast([0,1,2,3,4,5,6,7], dtypes.int64))
@@ -2737,38 +2570,6 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
           for j in range(3):
             self.assertAlmostEqual(emb1[i][j], emb_right[i][j])
     del os.environ["TF_EMBEDDING_FBJ_OPT"]
-  
-  def testCPUFbjOptWithBloomFilter(self):
-    print("testCPUFbjOptWithBloomFilter")
-    os.environ["TF_EMBEDDING_FBJ_OPT"] = "True"
-    var = variable_scope.get_embedding_variable("var_1",
-            embedding_dim = 3,
-            initializer=init_ops.ones_initializer(dtypes.float32),
-            ev_option = variables.EmbeddingVariableOption(filter_option=variables.CBFFilter(
-                                      filter_freq=3,
-                                      max_element_size = 5,
-                                      false_positive_probability = 0.01)))
-    emb = embedding_ops.embedding_lookup(var, math_ops.cast([1], dtypes.int64))
-    fun = math_ops.multiply(emb, 2.0, name='multiply')
-    loss = math_ops.reduce_sum(fun, name='reduce_sum')
-    gs = training_util.get_or_create_global_step()
-    opt = adagrad_decay.AdagradDecayOptimizer(0.1, gs)
-    g_v = opt.compute_gradients(loss)
-    train_op = opt.apply_gradients(g_v)
-    init = variables.global_variables_initializer()
-    with self.test_session() as sess:
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
-      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
-      sess.run([init])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertEqual(val, .0)
-      emb1, top, l = sess.run([emb, train_op, loss])
-      for val in emb1.tolist()[0]:
-        self.assertNotEqual(val, 1.0)
-    del os.environ["TF_EMBEDDING_FBJ_OPT"]
 
   def testGetFreqWithPartition(self):
     print("testGetFreqWithPartition")
@@ -3312,6 +3113,36 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
           value = checkpoint_utils.load_variable(model_path, name)
           self.assertAllEqual(value, [4, 3])
     del os.environ["TF_RECORD_FREQ"]
+
+  def testCustomBloomFilter(self):
+    print("testCustomBloomFilter")
+    with ops.device("/cpu:0"):
+      filter_option = variables.CBFFilter(3)
+      ev_option = variables.EmbeddingVariableOption(filter_option=filter_option)
+      var = variable_scope.get_embedding_variable("var_1",
+              embedding_dim = 3,
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              ev_option=ev_option)
+      ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad.AdagradOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      with self.test_session() as sess:
+        sess.run([init])
+        sess.run([train_op], feed_dict={ids:[1, 1, 1, 1, 2, 2, 2, 3, 4]})
+        result = sess.run(emb, feed_dict={ids:[1, 2, 3, 4]})
+        self.assertNotAllEqual(result[0], [0.0, 0.0, 0.0])
+        self.assertNotAllEqual(result[1], [0.0, 0.0, 0.0])
+        self.assertAllEqual(result[2], [0.0, 0.0, 0.0])
+        self.assertAllEqual(result[3], [0.0, 0.0, 0.0])
+        sess.run([train_op], feed_dict={ids:[3, 3]})
+        result = sess.run(emb, feed_dict={ids:[3]})
+        self.assertNotAllEqual(result[0], [0.0, 0.0, 0.0])
 
 if __name__ == "__main__":
   googletest.main()

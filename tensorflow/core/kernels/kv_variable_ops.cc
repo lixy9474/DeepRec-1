@@ -280,8 +280,7 @@ class InitializeKvVariableOp : public OpKernel {
                 opname + "-primary", steps_to_live_,
                 filter_freq_, max_freq_,
                 l2_weight_threshold_,
-                max_element_size_, false_positive_probability_,
-                counter_type_, default_value_dim_,
+                default_value_dim_,
                 default_value_no_permission_,
                 record_freq_, record_version_,
                 is_inference_);
@@ -325,8 +324,7 @@ class InitializeKvVariableOp : public OpKernel {
                 block_num_, slot_num_, opname + "-primary",
                 steps_to_live_, filter_freq_, max_freq_,
                 l2_weight_threshold_,
-                max_element_size_, false_positive_probability_,
-                counter_type_, 0, record_freq_, record_version_,
+                0, record_freq_, record_version_,
                 is_inference_);
             Allocator* alloc_for_ev =
                 (device_type_str_ == "CPU") ? ev_allocator() : allocator;
@@ -367,9 +365,7 @@ class InitializeKvVariableOp : public OpKernel {
               block_num_, slot_num_, opname,
               steps_to_live_, filter_freq_,
               max_freq_, l2_weight_threshold_,
-              max_element_size_,
-              false_positive_probability_,
-              counter_type_, default_value_dim_,
+              default_value_dim_,
               default_value_no_permission_,
               record_freq_, record_version_,
               is_inference_);

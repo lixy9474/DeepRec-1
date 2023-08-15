@@ -120,8 +120,7 @@ EmbeddingVar<int64, float>* CreateEmbeddingVar(
   auto embedding_config = EmbeddingConfig(
       0, 0, 1, 0, "emb_var", steps_to_live,
       filter_freq, 999999, l2_weight_threshold,
-      max_element_size, false_positive_probability,
-      counter_type, default_value_dim,
+      default_value_dim,
       0.0, record_freq, false, false);
   auto feat_desc = new embedding::FeatureDescriptor<float>(
       1, 1, ev_allocator(), storage_type,

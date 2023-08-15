@@ -267,17 +267,11 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     self._ht_partition_num = ht_partition_num
     self._is_sparse=False
     self.importer=None
-    if evconfig.filter_strategy != None:
-      if isinstance(evconfig.filter_strategy, variables.CounterFilter):
+    if isinstance(evconfig.filter_strategy, variables.CounterFilter):
         self._filter_freq = evconfig.filter_strategy.filter_freq
         self._max_element_size = 0
         self._false_positive_probability = -1.0
         self._counter_type = dtypes.uint64
-      elif isinstance(evconfig.filter_strategy, variables.CBFFilter):
-        self._filter_freq = evconfig.filter_strategy.filter_freq
-        self._max_element_size = evconfig.filter_strategy.max_element_size
-        self._false_positive_probability = evconfig.filter_strategy.false_positive_probability
-        self._counter_type = evconfig.filter_strategy.counter_type
     else:
       self._filter_freq = 0
       self._max_element_size = 0
@@ -304,6 +298,8 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
       self.custom_feature_evict = evconfig.custom_feature_evict
     else:
       self.custom_feature_evict = None
+    self._custom_feature_filter = evconfig.custom_feature_filter
+
     with ops.control_dependencies(None):
       with ops.name_scope(name, "Variable", []
                           if init_from_fn else [initial_value]) as name:
@@ -805,20 +801,29 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
       else:
         default_value = ops.convert_to_tensor(1.0)
         is_use_default_value_tensor = False
+      lookup_ids = indices
+      if self._custom_feature_filter != None:
+        admit_ids, admit_idx = self._custom_feature_filter.get_admit_ids(indices)
+        lookup_ids = admit_ids
       if counts != None:
         value = gen_kv_variable_ops.kv_resource_gather_v1(self._handle,
-              indices,
+              lookup_ids,
               default_value,
               counts, is_inference=True,
               name=name)
         self._counts_tensor = counts
       else:
         value = gen_kv_variable_ops.kv_resource_gather(self._handle,
-              indices,
+              lookup_ids,
               default_value,
               is_use_default_value_tensor,
               is_inference=True,
               name=name)
+      if self._custom_feature_filter != None:
+        zeros = array_ops.zeros(shape=[array_ops.shape(indices)[0],
+                                       array_ops.shape(value)[1]],
+                                dtype=dtypes.float32)
+        value = array_ops.tensor_scatter_add(zeros, admit_idx, value)
     return array_ops.identity(value)
 
   def to_proto(self, export_scope=None):

@@ -15,9 +15,6 @@ struct EmbeddingConfig {
   int64 filter_freq;
   int64 max_freq;
   float l2_weight_threshold;
-  int64 kHashFunc;
-  int64 num_counter;
-  DataType counter_type;
   int64 default_value_dim;
   float default_value_no_permission;
   bool record_freq;
@@ -33,9 +30,6 @@ struct EmbeddingConfig {
                   int64 filter_freq = 0,
                   int64 max_freq = 999999,
                   float l2_weight_threshold = -1.0,
-                  int64 max_element_size = 0,
-                  float false_positive_probability = -1.0,
-                  DataType counter_type = DT_UINT64,
                   int64 default_value_dim = 4096,
                   float default_value_no_permission = .0,
                   bool record_freq =false,
@@ -50,46 +44,16 @@ struct EmbeddingConfig {
       filter_freq(filter_freq),
       max_freq(max_freq),
       l2_weight_threshold(l2_weight_threshold),
-      counter_type(counter_type),
       default_value_dim(default_value_dim),
       default_value_no_permission(default_value_no_permission),
       record_freq(record_freq),
       record_version(record_version),
-      is_inference(is_inference) {
-    if (max_element_size != 0 && false_positive_probability != -1.0){
-      kHashFunc = calc_num_hash_func(false_positive_probability);
-      num_counter = calc_num_counter(max_element_size,
-          false_positive_probability);
-    } else {
-      kHashFunc = 0;
-      num_counter = 0;
-    }
-  }
-
-  int64 calc_num_counter(int64 max_element_size,
-      float false_positive_probability) {
-    float loghpp = fabs(log(false_positive_probability));
-    float factor = log(2) * log(2);
-    int64 num_bucket = ceil(loghpp / factor * max_element_size);
-    if (num_bucket * sizeof(counter_type) > 10 * (1L << 30))
-      LOG(WARNING)<<"The Size of BloomFilter is more than 10GB!";
-    return num_bucket;
-  }
+      is_inference(is_inference) {}
 
   bool is_counter_filter(){
-    if (filter_freq !=0 &&
-         kHashFunc == 0 &&
-         num_counter == 0){
-      return true;
-    } else {
-      return false;
-    }
+    return filter_freq != 0;
   }
 
-  int64 calc_num_hash_func(float false_positive_probability) {
-    float loghpp = fabs(log(false_positive_probability)/log(2));
-    return ceil(loghpp);
-  }
   bool is_primary() const {
     return emb_index == primary_emb_index;
   }

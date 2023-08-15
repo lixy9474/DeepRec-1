@@ -274,6 +274,10 @@ class EmbeddingVariableOption(object):
     self.filter_strategy = filter_option
     self.storage_option = storage_option
     self.init = init_option
+
+class CustomFilterOption(object):
+  def get_admit_ids(self, ids):
+    raise NotImplementeError
     
 @tf_export(v1=["CounterFilter"])
 class CounterFilter(object):
@@ -281,25 +285,26 @@ class CounterFilter(object):
     self.filter_freq = filter_freq
 
 @tf_export(v1=["CBFFilter"])
-class CBFFilter(object):
+class CBFFilter(CustomFilterOption):
   def __init__(self,
                filter_freq = 0,
-               max_element_size = 0,
-               false_positive_probability = -1.0,
+               max_element_size = None,
+               false_positive_probability = None,
                counter_type = dtypes.uint64):
-    if false_positive_probability != -1.0:
-      if false_positive_probability <= 0.0:
-        raise ValueError("false_positive_probablity must larger than 0")
-      else:
-       if max_element_size <= 0:
-          raise ValueError("max_element_size must larger than 0 when false_positive_probability is not -1.0")
-    else:
-      if max_element_size != 0:
-        raise ValueError("max_element_size can't be set when false_probability is -1.0")
-    self.max_element_size = max_element_size
-    self.false_positive_probability = false_positive_probability
-    self.counter_type = counter_type
-    self.filter_freq = filter_freq
+    from tensorflow.python.ops.hash_table import admit_strategy
+    self._bloom_filter = admit_strategy.BloomFilterAdmitStrategy(
+        filter_freq, max_element_size, false_positive_probability)
+
+  def get_admit_ids(self, ids):
+    unique_ids, unique_idx, counts = \
+        array_ops.unique_with_counts(ids)
+    is_admit = self._bloom_filter.admit(
+        unique_ids, math_ops.cast(counts, dtype=dtypes.uint32))
+    gather_is_admit = array_ops.gather(is_admit, unique_idx)
+    gather_is_admit.set_shape([None])
+    admit_ids = array_ops.boolean_mask(ids, gather_is_admit)
+    admit_indices = array_ops.where(gather_is_admit)
+    return admit_ids, admit_indices
 
 class EmbeddingVariableConfig(object):
   def __init__(self,
@@ -325,7 +330,8 @@ class EmbeddingVariableConfig(object):
                layout=None,
                default_value_dim=4096,
                default_value_no_permission=.0,
-               custom_feature_evict=None):
+               custom_feature_evict=None,
+               custom_feature_filter=None):
     self.steps_to_live = steps_to_live
     self.steps_to_live_l2reg = steps_to_live_l2reg
     self.l2reg_theta = l2reg_theta
@@ -351,6 +357,7 @@ class EmbeddingVariableConfig(object):
     self.default_value_dim = default_value_dim
     self.default_value_no_permission = default_value_no_permission
     self.custom_feature_evict = custom_feature_evict
+    self.custom_feature_filter = custom_feature_filter
 
   def reveal(self):
     if self.steps_to_live is None:
