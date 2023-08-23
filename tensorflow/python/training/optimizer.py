@@ -1088,6 +1088,13 @@ class Optimizer(
       An `Operation` which updates the value of the variable.
     """
     from tensorflow.python.ops import kv_variable_ops
+    apply_dependency = []
+    if isinstance(handle, kv_variable_ops.EmbeddingVariable) and \
+        not isinstance(handle.version_recorder, variables.EVVersionRecorder) and \
+        handle.version_recorder is not None:
+      from tensorflow.python.training import training_util
+      global_step = training_util.get_or_create_global_step()
+      apply_dependency.append(handle.version_recorder.update(indices, global_step))
     if isinstance(handle, kv_variable_ops.EmbeddingVariable) and handle.need_counts():
       if handle._counts_tensor is None:
         summed_grad, unique_indices, indices_counts = \
@@ -1097,14 +1104,26 @@ class Optimizer(
         summed_grad, unique_indices = _deduplicate_indexed_slices(
             values=grad, indices=indices)
         indices_counts = handle._counts_tensor
-      return self._resource_apply_sparse(
-          summed_grad, handle, unique_indices, indices_counts)
+      if not isinstance(handle.freq_recorder, variables.EVFreqRecorder) and \
+          handle.freq_recorder is not None:
+        apply_dependency.append(handle.freq_recorder.add(unique_indices, indices_counts))
+      with ops.control_dependencies(apply_dependency):
+        return self._resource_apply_sparse(
+            summed_grad, handle, unique_indices, indices_counts)
     else:
-      summed_grad, unique_indices = _deduplicate_indexed_slices(
-          values=grad, indices=indices)
-      indices_counts = None
-      return self._resource_apply_sparse(
-          summed_grad, handle, unique_indices)
+      if isinstance(handle, kv_variable_ops.EmbeddingVariable) and \
+          not isinstance(handle.freq_recorder, variables.EVFreqRecorder) and \
+          handle.freq_recorder is not None:
+        summed_grad, unique_indices, indices_counts = \
+            _deduplicate_indexed_slices_with_counts(
+                values=grad, indices=indices)
+        apply_dependency.append(handle.freq_recorder.add(unique_indices, indices_counts))
+      else:
+        summed_grad, unique_indices = _deduplicate_indexed_slices(
+            values=grad, indices=indices)
+      with ops.control_dependencies(apply_dependency):
+        return self._resource_apply_sparse(
+            summed_grad, handle, unique_indices)
 
   def _resource_apply_sparse(self, grad, handle, indices, indices_count=None):
     """Add ops to apply sparse gradients to the variable `handle`.

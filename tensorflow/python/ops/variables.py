@@ -266,7 +266,9 @@ class EmbeddingVariableOption(object):
                ckpt = None,
                filter_option = None,
                storage_option = StorageOption(),
-               init_option = InitializerOption()):
+               init_option = InitializerOption(),
+               freq_recorder = None,
+               version_recorder = None):
     self.ht_type = ht_type
     self.ht_partition_num = ht_partition_num
     self.evict = evict_option
@@ -274,6 +276,180 @@ class EmbeddingVariableOption(object):
     self.filter_strategy = filter_option
     self.storage_option = storage_option
     self.init = init_option
+    self.freq_recorder = freq_recorder
+    self.version_recorder = version_recorder
+
+EQUAL = lambda x,y: math_ops.equal(x, y)
+NOE_EQUAL = lambda x,y: math_ops.not_equal(x, y)
+GREATER = lambda x,y: math_ops.greater(x, y)
+LESS = lambda x,y: math_ops.less(x, y)
+GREATER_EQUAL = lambda x,y: math_ops.greater_equal(x, y)
+LESS_EQUAL = lambda x,y: math_ops.less_equal(x, y)
+
+def dynamic_partition(ids, np):
+  original_indices = math_ops.range(array_ops.size(ids))
+  p_assignments = ids % 1000 % np
+  p_assignments = math_ops.cast(p_assignments, dtypes.int32)
+  from tensorflow.python.ops import data_flow_ops
+  gather_ids = data_flow_ops.dynamic_partition(ids, p_assignments, np)
+  pindices = data_flow_ops.dynamic_partition(original_indices,
+                                             p_assignments, np)
+  return gather_ids, pindices
+
+def filter_key_based_on_values(var, operator, values, threshold):
+  keys = gen_kv_variable_ops.ev_export_key(
+      var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
+  broadcast_threshold = array_ops.fill(array_ops.shape(values), threshold)
+  compare_result = operator(values, broadcast_threshold)
+  compare_result.set_shape([None])
+  return array_ops.boolean_mask(keys, compare_result)
+
+class FreqRecorder(object):
+  def add(self, ids, counts):
+    raise NotImplemented
+
+class EVFreqRecorder(FreqRecorder):
+  def __init__(self):
+    self._var_list = []
+
+  def add(self, ids, counts):
+    if len(self._var_list) == 0:
+      raise ValueError("No EmbeddingVariable is added to EVFreqRecorder")
+    if len(self._var_list) == 1:
+      var = self._var_list[0]
+      return  gen_kv_variable_ops.ev_add_frequency(var._handle,
+                                              ids,
+                                              counts,
+                                              Tvalues=var._dtype)
+    else:
+      np = len(self._var_list)
+      partitioned_result = []
+      p_assignments = ids % 1000 % np
+      p_assignments = math_ops.cast(p_assignments, dtypes.int32)
+      from tensorflow.python.ops import data_flow_ops
+      update_ids = data_flow_ops.dynamic_partition(ids, p_assignments, np)
+      update_counts = data_flow_ops.dynamic_partition(counts, p_assignments, np)
+      for (i, val) in enumerate(self._var_list):
+        with ops.colocate_with(val):
+          result =  gen_kv_variable_ops.ev_add_frequency(val._handle,
+                                              update_ids[i],
+                                              update_counts[i],
+                                              Tvalues=val._dtype)
+          partitioned_result.append(result)
+      return partitioned_result
+
+  def add_var(self, var):
+    self._var_list.append(var)
+
+  def lookup(self, ids):
+    if len(self._var_list) == 0:
+      raise ValueError("No EmbeddingVariable is added to EVFreqRecorder")
+    if len(self._var_list) == 1:
+      var = self._var_list[0]
+      return gen_kv_variable_ops.ev_get_frequency(
+          var._handle, ids, Tvalues=var._dtype)
+    else:
+      np = len(self._var_list)
+      partitioned_result = []
+      gather_ids, pindices = dynamic_partition(ids, np)
+      for (i, val) in enumerate(self._var_list):
+        with ops.colocate_with(val):
+          result =  gen_kv_variable_ops.ev_get_frequency(
+              val._handle, gather_ids[i], Tvalues=val._dtype)
+          partitioned_result.append(result)
+      from tensorflow.python.ops import data_flow_ops
+      ret = data_flow_ops.parallel_dynamic_stitch(
+            pindices, partitioned_result)
+      return ret
+
+  def selective_lookup(self, operator, threshold):
+    if len(self._var_list) == 0:
+      raise ValueError("No EmbeddingVariable is added to EVFreqRecorder")
+    if len(self._var_list) == 1:
+      var = self._var_list[0]
+      freqs = gen_kv_variable_ops.ev_export_frequency(
+          var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
+      return filter_key_based_on_values(var, operator, freqs, threshold)
+    else:
+      np = len(self._var_list)
+      partitioned_result = []
+      for (i, val) in enumerate(self._var_list):
+        with ops.colocate_with(val):
+          freqs = gen_kv_variable_ops.ev_export_frequency(
+              val._handle, Tkeys=val._invalid_key_type, dtype=val._dtype)
+          partitioned_result.append(
+              filter_key_based_on_values(val, operator, freqs, threshold))
+      return array_ops.concat(partitioned_result, 0)
+
+class VersionRecorder(object):
+  def update_version(ids, global_step):
+    raise NotImplemented
+
+class EVVersionRecorder(VersionRecorder):
+  def __init__(self):
+    self._var_list = []
+
+  def add_var(self, var):
+    self._var_list.append(var)
+
+  def update(self, ids, global_step):
+    if len(self._var_list) == 0:
+      raise ValueError("No EmbeddingVariable is added to EVVersionRecorder")
+    if len(self._var_list) == 1:
+      var = self._var_list[0]
+      return  gen_kv_variable_ops.ev_update_version(
+          var._handle, ids, global_step, Tvalues=var._dtype)
+    else:
+      np = len(self._var_list)
+      partitioned_result = []
+      gather_ids, pindices = dynamic_partition(ids, np)
+      for (i, val) in enumerate(self._var_list):
+        with ops.colocate_with(val):
+          update_op = gen_kv_variable_ops.ev_update_version(
+              val._handle, gather_ids[i], global_step, Tvalues=val._dtype)
+          partitioned_result.append(update_op)
+      return partitioned_result
+
+  def lookup(self, ids):
+    if len(self._var_list) == 0:
+      raise ValueError("No EmbeddingVariable is added to EVVersionRecorder")
+    if len(self._var_list) == 1:
+      var = self._var_list[0]
+      return  gen_kv_variable_ops.ev_get_version(
+          var._handle, ids, Tvalues=var._dtype)
+    else:
+      np = len(self._var_list)
+      partitioned_result = []
+      gather_ids, pindices = dynamic_partition(ids, np)
+      for (i, val) in enumerate(self._var_list):
+        with ops.colocate_with(val):
+          result =  gen_kv_variable_ops.ev_get_version(val._handle,
+                                              gather_ids[i],
+                                              Tvalues=val._dtype)
+          partitioned_result.append(result)
+      from tensorflow.python.ops import data_flow_ops
+      ret = data_flow_ops.parallel_dynamic_stitch(
+            pindices, partitioned_result)
+      return ret
+
+  def selective_lookup(self, operator, threshold):
+    if len(self._var_list) == 0:
+      raise ValueError("No EmbeddingVariable is added to EVVersionRecorder")
+    if len(self._var_list) == 1:
+      var = self._var_list[0]
+      versions = gen_kv_variable_ops.ev_export_version(
+        var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
+      return filter_key_based_on_values(var, operator, versions, threshold)
+    else:
+      np = len(self._var_list)
+      partitioned_result = []
+      for (i, val) in enumerate(self._var_list):
+        with ops.colocate_with(val):
+          freqs = gen_kv_variable_ops.ev_export_version(
+              val._handle, Tkeys=val._invalid_key_type, dtype=val._dtype)
+          partitioned_result.append(
+              filter_key_based_on_values(val, operator, freqs, threshold))
+      return array_ops.concat(partitioned_result, 0)
 
 class CustomFilterOption(object):
   def get_admit_ids(self, ids):
@@ -331,7 +507,9 @@ class EmbeddingVariableConfig(object):
                default_value_dim=4096,
                default_value_no_permission=.0,
                custom_feature_evict=None,
-               custom_feature_filter=None):
+               custom_feature_filter=None,
+               freq_recorder=None,
+               version_recorder=None):
     self.steps_to_live = steps_to_live
     self.steps_to_live_l2reg = steps_to_live_l2reg
     self.l2reg_theta = l2reg_theta
@@ -358,6 +536,8 @@ class EmbeddingVariableConfig(object):
     self.default_value_no_permission = default_value_no_permission
     self.custom_feature_evict = custom_feature_evict
     self.custom_feature_filter = custom_feature_filter
+    self.freq_recorder = freq_recorder
+    self.version_recorder = version_recorder
 
   def reveal(self):
     if self.steps_to_live is None:

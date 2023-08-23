@@ -71,17 +71,33 @@ class GradientDescentOptimizer(optimizer.Optimizer):
   def _resource_apply_sparse_duplicate_indices(self, grad, handle, indices):
     if isinstance(handle, kv_variable_ops.EmbeddingVariable):
       global_step = training_util.get_or_create_global_step()
+      apply_dependency = []
+      from tensorflow.python.ops import variables
+      from tensorflow.python.ops import array_ops
+      from tensorflow.python.framework import dtypes
+      if not isinstance(handle.version_recorder, variables.EVVersionRecorder)and \
+          handle.version_recorder is not None:
+        apply_dependency.append(handle.version_recorder.update(indices, global_step))
+      if not isinstance(handle.freq_recorder, variables.EVFreqRecorder) and \
+          handle.freq_recorder is not None:
+        if handle._counts_tensor != None:
+          counts_tensor = handle._counts_tensor
+        else:
+          counts_tensor = array_ops.ones_like(indices, dtype=dtypes.int64)
+        apply_dependency.append(handle.freq_recorder.add(indices, counts_tensor))
       if handle.need_counts() and handle._counts_tensor is not None:
-        return training_ops.kv_resource_sparse_apply_gradient_descent_with_counts(
-            handle.handle, math_ops.cast(self._learning_rate_tensor,
-                                         grad.dtype.base_dtype),
-            grad, indices, global_step,
-            handle._counts_tensor, use_locking=self._use_locking)
+        with ops.control_dependencies(apply_dependency):
+          return training_ops.kv_resource_sparse_apply_gradient_descent_with_counts(
+              handle.handle, math_ops.cast(self._learning_rate_tensor,
+                                           grad.dtype.base_dtype),
+              grad, indices, global_step,
+              handle._counts_tensor, use_locking=self._use_locking)
       else:
-        return training_ops.kv_resource_sparse_apply_gradient_descent(
-            handle.handle, math_ops.cast(self._learning_rate_tensor,
-                                         grad.dtype.base_dtype),
-            grad, indices, global_step, use_locking=self._use_locking)
+        with ops.control_dependencies(apply_dependency):
+          return training_ops.kv_resource_sparse_apply_gradient_descent(
+              handle.handle, math_ops.cast(self._learning_rate_tensor,
+                                           grad.dtype.base_dtype),
+              grad, indices, global_step, use_locking=self._use_locking)
     else:
       return resource_variable_ops.resource_scatter_add(
           handle.handle, indices, -grad * self._learning_rate)

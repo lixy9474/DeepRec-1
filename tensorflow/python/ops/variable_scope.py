@@ -2218,7 +2218,9 @@ def get_embedding_variable(name,
         default_value_dim=ev_option.init.default_value_dim,
         default_value_no_permission=ev_option.init.default_value_no_permission,
         custom_feature_evict=custom_feature_evict,
-        custom_feature_filter=custom_feature_filter),
+        custom_feature_filter=custom_feature_filter,
+        freq_recorder=ev_option.freq_recorder,
+        version_recorder=ev_option.version_recorder),
         ht_partition_num=ev_option.ht_partition_num)
 
 
@@ -2296,7 +2298,9 @@ def get_embedding_variable_internal(name,
         default_value_dim=ev_option.init.default_value_dim,
         default_value_no_permission=ev_option.init.default_value_no_permission,
         custom_feature_evict=custom_feature_evict,
-        custom_feature_filter=custom_feature_filter),
+        custom_feature_filter=custom_feature_filter,
+        freq_recorder=ev_option.freq_recorder,
+        version_recorder=ev_option.version_recorder),
       ht_partition_num=ev_option.ht_partition_num)
 
 

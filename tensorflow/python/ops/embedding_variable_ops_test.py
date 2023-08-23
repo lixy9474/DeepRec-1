@@ -2573,12 +2573,14 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
 
   def testGetFreqWithPartition(self):
     print("testGetFreqWithPartition")
-    os.environ["TF_RECORD_FREQ"] = "1"
+    freq_recorder = variables.EVFreqRecorder()
+    ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
               initializer=init_ops.ones_initializer(dtypes.float32),
-              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4),
+              ev_option=ev_option)
       emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
       fun = math_ops.multiply(emb, 2.0, name='multiply')
       loss = math_ops.reduce_sum(fun, name='reduce_sum')
@@ -2587,21 +2589,22 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v)
       init = variables.global_variables_initializer()
-      freqs = kv_variable_ops.lookup_freq(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      freqs = freq_recorder.lookup(math_ops.cast([1,2,3,4], dtypes.int64))
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op)
         result = sess.run(freqs)
         self.assertAllEqual(result, [4, 3, 2, 1])
-    del os.environ["TF_RECORD_FREQ"]
 
   def testGetFreqWithoutPartition(self):
     print("testGetFreqWithoutPartition")
-    os.environ["TF_RECORD_FREQ"] = "1"
+    freq_recorder = variables.EVFreqRecorder()
+    ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
-              initializer=init_ops.ones_initializer(dtypes.float32))
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              ev_option=ev_option)
       emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
       fun = math_ops.multiply(emb, 2.0, name='multiply')
       loss = math_ops.reduce_sum(fun, name='reduce_sum')
@@ -2610,22 +2613,23 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v)
       init = variables.global_variables_initializer()
-      freqs = kv_variable_ops.lookup_freq(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      freqs = freq_recorder.lookup(math_ops.cast([1,2,3,4], dtypes.int64))
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op)
         result = sess.run(freqs)
         self.assertAllEqual(result, [4, 3, 2, 1])
-    del os.environ["TF_RECORD_FREQ"]
 
   def testAddFreqWithPartition(self):
     print("testAddFreqWithPartition")
-    os.environ["TF_RECORD_FREQ"] = "1"
+    freq_recorder = variables.EVFreqRecorder()
+    ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
               initializer=init_ops.ones_initializer(dtypes.float32),
-              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4),
+              ev_option=ev_option)
       emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
       fun = math_ops.multiply(emb, 2.0, name='multiply')
       loss = math_ops.reduce_sum(fun, name='reduce_sum')
@@ -2634,8 +2638,8 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v)
       init = variables.global_variables_initializer()
-      freqs = kv_variable_ops.lookup_freq(var, math_ops.cast([1,2,3,4], dtypes.int64))
-      add_freq_ops = kv_variable_ops.add_freq(var, math_ops.cast([1,2,3,4], dtypes.int64), freqs)
+      freqs = freq_recorder.lookup(math_ops.cast([1,2,3,4], dtypes.int64))
+      add_freq_ops = freq_recorder.add(math_ops.cast([1,2,3,4], dtypes.int64), freqs)
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op)
@@ -2643,15 +2647,16 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(add_freq_ops)
         result = sess.run(freqs)
         self.assertAllEqual(result, [8, 6, 4, 2])
-    del os.environ["TF_RECORD_FREQ"]
 
   def testAddFreqWithoutPartition(self):
     print("testAddFreqWithoutPartition")
-    os.environ["TF_RECORD_FREQ"] = "1"
+    freq_recorder = variables.EVFreqRecorder()
+    ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
-              initializer=init_ops.ones_initializer(dtypes.float32))
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              ev_option=ev_option)
       emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
       fun = math_ops.multiply(emb, 2.0, name='multiply')
       loss = math_ops.reduce_sum(fun, name='reduce_sum')
@@ -2660,8 +2665,8 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v)
       init = variables.global_variables_initializer()
-      freqs = kv_variable_ops.lookup_freq(var, math_ops.cast([1,2,3,4], dtypes.int64))
-      add_freq_ops = kv_variable_ops.add_freq(var, math_ops.cast([1,2,3,4], dtypes.int64), freqs)
+      freqs = freq_recorder.lookup(math_ops.cast([1,2,3,4], dtypes.int64))
+      add_freq_ops = freq_recorder.add(math_ops.cast([1,2,3,4], dtypes.int64), freqs)
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op)
@@ -2669,16 +2674,17 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(add_freq_ops)
         result = sess.run(freqs)
         self.assertAllEqual(result, [8, 6, 4, 2])
-    del os.environ["TF_RECORD_FREQ"]
 
   def testGetVersionWithPartition(self):
     print("testGetVersionWithPartition")
-    os.environ["TF_RECORD_VERSION"] = "1"
+    version_recorder = variables.EVVersionRecorder()
+    ev_option = variables.EmbeddingVariableOption(version_recorder=version_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
               initializer=init_ops.ones_initializer(dtypes.float32),
-              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4),
+              ev_option=ev_option)
       ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
       emb = embedding_ops.embedding_lookup(var, ids)
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -2688,7 +2694,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v, global_step=gs)
       init = variables.global_variables_initializer()
-      versions = kv_variable_ops.lookup_version(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      versions = version_recorder.lookup(math_ops.cast([1,2,3,4], dtypes.int64))
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op, feed_dict={ids:[4]})
@@ -2697,15 +2703,16 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(train_op, feed_dict={ids:[1]})
         result = sess.run(versions)
         self.assertAllEqual(result, [4, 3, 2, 1])
-    del os.environ["TF_RECORD_VERSION"]
 
   def testGetVersionWithoutPartition(self):
     print("testGetVersionWithoutPartition")
-    os.environ["TF_RECORD_VERSION"] = "1"
+    version_recorder = variables.EVVersionRecorder()
+    ev_option = variables.EmbeddingVariableOption(version_recorder=version_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
-              initializer=init_ops.ones_initializer(dtypes.float32))
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              ev_option=ev_option)
       ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
       emb = embedding_ops.embedding_lookup(var, ids)
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -2715,7 +2722,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v, global_step=gs)
       init = variables.global_variables_initializer()
-      versions = kv_variable_ops.lookup_version(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      versions = version_recorder.lookup(math_ops.cast([1,2,3,4], dtypes.int64))
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op, feed_dict={ids:[4]})
@@ -2724,16 +2731,17 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(train_op, feed_dict={ids:[1]})
         result = sess.run(versions)
         self.assertAllEqual(result, [4, 3, 2, 1])
-    del os.environ["TF_RECORD_VERSION"]
 
   def testUpdateVersionWithPartition(self):
     print("testUpdateVersionWithPartition")
-    os.environ["TF_RECORD_VERSION"] = "1"
+    version_recorder = variables.EVVersionRecorder()
+    ev_option = variables.EmbeddingVariableOption(version_recorder=version_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
               initializer=init_ops.ones_initializer(dtypes.float32),
-              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4),
+              ev_option=ev_option)
       ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
       emb = embedding_ops.embedding_lookup(var, ids)
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -2743,13 +2751,13 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v, global_step=gs)
       init = variables.global_variables_initializer()
-      versions = kv_variable_ops.lookup_version(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      versions = version_recorder.lookup(math_ops.cast([1,2,3,4], dtypes.int64))
       version_1 = array_ops.constant(3)
       version_2 = array_ops.constant(4)
-      update_version_op_1 = kv_variable_ops.update_version(
-          var, math_ops.cast([1,2], dtypes.int64), version_1)
-      update_version_op_2 = kv_variable_ops.update_version(
-          var, math_ops.cast([3,4], dtypes.int64), version_2)
+      update_version_op_1 = version_recorder.update(
+          math_ops.cast([1,2], dtypes.int64), version_1)
+      update_version_op_2 = version_recorder.update(
+          math_ops.cast([3,4], dtypes.int64), version_2)
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op, feed_dict={ids:[1, 2, 3, 4]})
@@ -2757,15 +2765,16 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(update_version_op_2)
         result = sess.run(versions)
         self.assertAllEqual(result, [3, 3, 4, 4])
-    del os.environ["TF_RECORD_VERSION"]
 
   def testUpdateVersionWithoutPartition(self):
     print("testUpdateVersionWithoutPartition")
-    os.environ["TF_RECORD_VERSION"] = "1"
+    version_recorder = variables.EVVersionRecorder()
+    ev_option = variables.EmbeddingVariableOption(version_recorder=version_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
-              initializer=init_ops.ones_initializer(dtypes.float32))
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              ev_option=ev_option)
       ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
       emb = embedding_ops.embedding_lookup(var, ids)
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -2775,13 +2784,13 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v, global_step=gs)
       init = variables.global_variables_initializer()
-      versions = kv_variable_ops.lookup_version(var, math_ops.cast([1,2,3,4], dtypes.int64))
+      versions = version_recorder.lookup(math_ops.cast([1,2,3,4], dtypes.int64))
       version_1 = array_ops.constant(3)
       version_2 = array_ops.constant(4)
-      update_version_op_1 = kv_variable_ops.update_version(
-          var, math_ops.cast([1,2], dtypes.int64), version_1)
-      update_version_op_2 = kv_variable_ops.update_version(
-          var, math_ops.cast([3,4], dtypes.int64), version_2)
+      update_version_op_1 = version_recorder.update(
+          math_ops.cast([1,2], dtypes.int64), version_1)
+      update_version_op_2 = version_recorder.update(
+          math_ops.cast([3,4], dtypes.int64), version_2)
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op, feed_dict={ids:[1, 2, 3, 4]})
@@ -2789,7 +2798,6 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(update_version_op_2)
         result = sess.run(versions)
         self.assertAllEqual(result, [3, 3, 4, 4])
-    del os.environ["TF_RECORD_VERSION"]
 
   def testSelectiveLookupL2WeightWithPartition(self):
     print("testSelectiveLookupL2WeightWithPartition")
@@ -2807,7 +2815,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
     saver = saver_module.Saver()
     init = variables.global_variables_initializer()
     evict_ids = kv_variable_ops.selective_lookup_l2_weight(
-        var, kv_variable_ops.GREATER_EQUAL, array_ops.constant(0.9, dtype=dtypes.float32))
+        var, variables.GREATER_EQUAL, array_ops.constant(0.9, dtype=dtypes.float32))
     with self.test_session() as sess:
       sess.run(init)
       emb_ori = sess.run([emb, train_op])
@@ -2829,7 +2837,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
     saver = saver_module.Saver()
     init = variables.global_variables_initializer()
     evict_ids = kv_variable_ops.selective_lookup_l2_weight(
-        var, kv_variable_ops.GREATER_EQUAL, array_ops.constant(0.9, dtype=dtypes.float32))
+        var, variables.GREATER_EQUAL, array_ops.constant(0.9, dtype=dtypes.float32))
     with self.test_session() as sess:
       sess.run(init)
       emb_ori = sess.run([emb, train_op])
@@ -2838,12 +2846,14 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
 
   def testSelectiveLookupFrequencyWithPartition(self):
     print("testSelectiveLookupFrequencyWithPartition")
-    os.environ["TF_RECORD_FREQ"] = "1"
+    freq_recorder = variables.EVFreqRecorder()
+    ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
               initializer=init_ops.ones_initializer(dtypes.float32),
-              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4),
+              ev_option=ev_option)
       emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
       fun = math_ops.multiply(emb, 2.0, name='multiply')
       loss = math_ops.reduce_sum(fun, name='reduce_sum')
@@ -2852,23 +2862,23 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v)
       init = variables.global_variables_initializer()
-      evict_ids = kv_variable_ops.selective_lookup_freq(
-          var, kv_variable_ops.GREATER_EQUAL, array_ops.constant(2, dtypes.int64))
+      evict_ids = freq_recorder.selective_lookup(
+          variables.GREATER_EQUAL, array_ops.constant(2, dtypes.int64))
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op)
         result = sess.run(evict_ids)
         self.assertAllEqual(result, [1, 2, 3])
-    del os.environ["TF_RECORD_FREQ"]
 
   def testSelectiveLookupFrequencyWithoutPartition(self):
     print("testSelectiveLookupFrequencyWithoutPartition")
-    os.environ["TF_RECORD_FREQ"] = "1"
+    freq_recorder = variables.EVFreqRecorder()
+    ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
               initializer=init_ops.ones_initializer(dtypes.float32),
-              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+              ev_option=ev_option)
       emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtypes.int64))
       fun = math_ops.multiply(emb, 2.0, name='multiply')
       loss = math_ops.reduce_sum(fun, name='reduce_sum')
@@ -2877,23 +2887,24 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v)
       init = variables.global_variables_initializer()
-      evict_ids = kv_variable_ops.selective_lookup_freq(
-          var, kv_variable_ops.LESS_EQUAL, array_ops.constant(2, dtypes.int64))
+      evict_ids = freq_recorder.selective_lookup(
+          variables.LESS_EQUAL, array_ops.constant(2, dtypes.int64))
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op)
         result = sess.run(evict_ids)
         self.assertAllEqual(result, [3, 4])
-    del os.environ["TF_RECORD_FREQ"]
 
   def testSelectVersionWithPartition(self):
     print("testSelectVersionWithPartition")
-    os.environ["TF_RECORD_VERSION"] = "1"
+    version_recorder = variables.EVVersionRecorder()
+    ev_option = variables.EmbeddingVariableOption(version_recorder=version_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
               initializer=init_ops.ones_initializer(dtypes.float32),
-              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4),
+              ev_option=ev_option)
       ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
       emb = embedding_ops.embedding_lookup(var, ids)
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -2903,8 +2914,8 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v, global_step=gs)
       init = variables.global_variables_initializer()
-      evict_ids = kv_variable_ops.selective_lookup_version(
-          var, kv_variable_ops.EQUAL, array_ops.constant(2, dtypes.int64))
+      evict_ids = version_recorder.selective_lookup(
+          variables.EQUAL, array_ops.constant(2, dtypes.int64))
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op, feed_dict={ids:[4]})
@@ -2913,15 +2924,16 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(train_op, feed_dict={ids:[1]})
         result = sess.run(evict_ids)
         self.assertAllEqual(result, [3])
-    del os.environ["TF_RECORD_VERSION"]
 
   def testSelectVersionWithoutPartition(self):
     print("testSelectVersionWithoutPartition")
-    os.environ["TF_RECORD_VERSION"] = "1"
+    version_recorder = variables.EVVersionRecorder()
+    ev_option = variables.EmbeddingVariableOption(version_recorder=version_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
-              initializer=init_ops.ones_initializer(dtypes.float32))
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              ev_option=ev_option)
       ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
       emb = embedding_ops.embedding_lookup(var, ids)
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -2931,8 +2943,8 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v, global_step=gs)
       init = variables.global_variables_initializer()
-      evict_ids = kv_variable_ops.selective_lookup_version(
-          var, kv_variable_ops.GREATER, array_ops.constant(2, dtypes.int64))
+      evict_ids = version_recorder.selective_lookup(
+          variables.GREATER, array_ops.constant(2, dtypes.int64))
       with self.test_session() as sess:
         sess.run([init])
         sess.run(train_op, feed_dict={ids:[4]})
@@ -2941,16 +2953,17 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run(train_op, feed_dict={ids:[1]})
         result = sess.run(evict_ids)
         self.assertAllEqual(result, [1, 2])
-    del os.environ["TF_RECORD_VERSION"]
 
   def testRemoveFeatureWithPartition(self):
     print("testRemoveFeatureWithPartition")
-    os.environ["TF_RECORD_FREQ"] = "1"
+    freq_recorder = variables.EVFreqRecorder()
+    ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
               initializer=init_ops.ones_initializer(dtypes.float32),
-              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4))
+              partitioner=partitioned_variables.fixed_size_partitioner(num_shards=4),
+              ev_option=ev_option)
       ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
       emb = embedding_ops.embedding_lookup(var, ids)
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -2960,8 +2973,8 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v, global_step=gs)
       init = variables.global_variables_initializer()
-      evict_ids = kv_variable_ops.selective_lookup_freq(
-          var, kv_variable_ops.LESS, array_ops.constant(3, dtypes.int64))
+      evict_ids = freq_recorder.selective_lookup(
+          variables.LESS, array_ops.constant(3, dtypes.int64))
       remove_op = kv_variable_ops.remove(var, evict_ids)
       with self.test_session() as sess:
         sess.run([init])
@@ -2973,15 +2986,16 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         self.assertNotAllEqual(embs[1], [1.0, 1.0, 1.0])
         self.assertAllEqual(embs[2], [1.0, 1.0, 1.0])
         self.assertAllEqual(embs[3], [1.0, 1.0, 1.0])
-    del os.environ["TF_RECORD_FREQ"]
 
   def testRemoveFeatureWithoutPartition(self):
     print("testRemoveFeatureWithoutPartition")
-    os.environ["TF_RECORD_FREQ"] = "1"
+    freq_recorder = variables.EVFreqRecorder()
+    ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
     with ops.device("/cpu:0"):
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
-              initializer=init_ops.ones_initializer(dtypes.float32))
+              initializer=init_ops.ones_initializer(dtypes.float32),
+              ev_option=ev_option)
       ids = array_ops.placeholder(dtype=dtypes.int64, name="ids")
       emb = embedding_ops.embedding_lookup(var, ids)
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -2991,8 +3005,8 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       g_v = opt.compute_gradients(loss)
       train_op = opt.apply_gradients(g_v, global_step=gs)
       init = variables.global_variables_initializer()
-      evict_ids = kv_variable_ops.selective_lookup_freq(
-          var, kv_variable_ops.LESS, array_ops.constant(3, dtypes.int64))
+      evict_ids = freq_recorder.selective_lookup(
+          variables.LESS, array_ops.constant(3, dtypes.int64))
       remove_op = kv_variable_ops.remove(var, evict_ids)
       with self.test_session() as sess:
         sess.run([init])
@@ -3004,7 +3018,6 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         self.assertNotAllEqual(embs[1], [1.0, 1.0, 1.0])
         self.assertAllEqual(embs[2], [1.0, 1.0, 1.0])
         self.assertAllEqual(embs[3], [1.0, 1.0, 1.0])
-    del os.environ["TF_RECORD_FREQ"]
 
   def testInsertFeatureWithPartition(self):
     print("testInsertFeatureWithPartition")
@@ -3074,17 +3087,20 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
   def testCustomFeatureEviction(self):
     print("testCustomFeatureEviction")
     class FreqEvict(kv_variable_ops.CustomEvictOption):
-      def get_evict_ids(self, var):
-        return kv_variable_ops.selective_lookup_freq(
-            var, kv_variable_ops.LESS,
+      def __init__(self, freq_recorder):
+        self._freq_recorder = freq_recorder
+      def get_evict_ids(self):
+        return self._freq_recorder.selective_lookup(
+            variables.LESS,
             array_ops.constant(3, dtype=dtypes.int64))
     checkpoint_directory = self.get_temp_dir()
     model_path = os.path.join(checkpoint_directory, "model-custom.ckpt")
-    os.environ["TF_RECORD_FREQ"] = "1"
+    freq_recorder = variables.EVFreqRecorder()
 
     with ops.device("/cpu:0"):
-      evict_option = FreqEvict()
-      ev_option = variables.EmbeddingVariableOption(evict_option=evict_option)
+      evict_option = FreqEvict(freq_recorder)
+      ev_option = variables.EmbeddingVariableOption(evict_option=evict_option,
+                                                    freq_recorder=freq_recorder)
       var = variable_scope.get_embedding_variable("var_1",
               embedding_dim = 3,
               initializer=init_ops.ones_initializer(dtypes.float32),
@@ -3112,7 +3128,6 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
           self.assertEqual(shape[0], 2)
           value = checkpoint_utils.load_variable(model_path, name)
           self.assertAllEqual(value, [4, 3])
-    del os.environ["TF_RECORD_FREQ"]
 
   def testCustomBloomFilter(self):
     print("testCustomBloomFilter")
@@ -3143,6 +3158,167 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         sess.run([train_op], feed_dict={ids:[3, 3]})
         result = sess.run(emb, feed_dict={ids:[3]})
         self.assertNotAllEqual(result[0], [0.0, 0.0, 0.0])
+
+  def testCustomFreqRecorder(self):
+    print("testCustomFreqRecorder")
+    class MyFreqRecorder(variables.FreqRecorder):
+      def __init__(self):
+        self._counter = variable_scope.get_variable("freq_counter", shape=[10], dtype=dtypes.int64)
+      def add(self, ids, counts):
+        from tensorflow.python.ops import state_ops
+        return state_ops.scatter_add(self._counter, ids, counts)
+      def lookup(self, ids):
+        return array_ops.gather(self._counter, ids)
+
+    with ops.device("/cpu:0"):
+      freq_recorder = MyFreqRecorder()
+      ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
+      var = variable_scope.get_embedding_variable("var", embedding_dim=3, ev_option=ev_option)
+      emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtype=dtypes.int64))
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad.AdagradOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      freqs = freq_recorder.lookup(math_ops.cast([1,2,3,4], dtype=dtypes.int64))
+    with self.test_session() as sess:
+      sess.run([init])
+      sess.run([train_op])
+      result = sess.run(freqs)
+      self.assertAllEqual(result, [4,3,2,1])
+
+  def testCustomFreqRecorderWithEVRecordFreq(self):
+    print("testCustomFreqRecorderWithEVRecordFreq")
+    class MyFreqRecorder(variables.FreqRecorder):
+      def __init__(self):
+        self._counter = variable_scope.get_variable("freq_counter", shape=[10], dtype=dtypes.int64)
+      def add(self, ids, counts):
+        from tensorflow.python.ops import state_ops
+        return state_ops.scatter_add(self._counter, ids, counts)
+      def lookup(self, ids):
+        return array_ops.gather(self._counter, ids)
+    os.environ["TF_RECORD_FREQ"] = "1"
+    with ops.device("/cpu:0"):
+      freq_recorder = MyFreqRecorder()
+      ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
+      var = variable_scope.get_embedding_variable("var", embedding_dim=3, ev_option=ev_option)
+      emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtype=dtypes.int64))
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad.AdagradOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      freqs = freq_recorder.lookup(math_ops.cast([1,2,3,4], dtype=dtypes.int64))
+    with self.test_session() as sess:
+      sess.run([init])
+      sess.run([train_op])
+      result = sess.run(freqs)
+      self.assertAllEqual(result, [4,3,2,1])
+    del os.environ["TF_RECORD_FREQ"]
+
+  def testCustomFreqRecorderWithSGD(self):
+    print("testCustomFreqRecorder")
+    class MyFreqRecorder(variables.FreqRecorder):
+      def __init__(self):
+        self._counter = variable_scope.get_variable("freq_counter", shape=[10], dtype=dtypes.int64)
+      def add(self, ids, counts):
+        from tensorflow.python.ops import state_ops
+        return state_ops.scatter_add(self._counter, ids, counts)
+      def lookup(self, ids):
+        return array_ops.gather(self._counter, ids)
+
+    with ops.device("/cpu:0"):
+      freq_recorder = MyFreqRecorder()
+      ev_option = variables.EmbeddingVariableOption(freq_recorder=freq_recorder)
+      var = variable_scope.get_embedding_variable("var", embedding_dim=3, ev_option=ev_option)
+      emb = embedding_ops.embedding_lookup(var, math_ops.cast([1,1,1,1,2,2,2,3,3,4], dtype=dtypes.int64))
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = gradient_descent.GradientDescentOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      freqs = freq_recorder.lookup(math_ops.cast([1,2,3,4], dtype=dtypes.int64))
+    with self.test_session() as sess:
+      sess.run([init])
+      sess.run([train_op])
+      result = sess.run(freqs)
+      self.assertAllEqual(result, [4,3,2,1])
+
+  def testCustomVersionRecorder(self):
+    print("testCustomVersionRecorder")
+    class MyVersionRecorder(variables.VersionRecorder):
+      def __init__(self):
+        self._counter = variable_scope.get_variable("version_recorder", shape=[10], dtype=dtypes.int64)
+      def update(self, ids, global_step):
+        from tensorflow.python.ops import state_ops
+        global_step_tensor = array_ops.broadcast_to(global_step, array_ops.shape(ids))
+        return state_ops.scatter_update(self._counter, ids, global_step_tensor)
+      def lookup(self, ids):
+        return array_ops.gather(self._counter, ids)
+
+    with ops.device("/cpu:0"):
+      version_recorder = MyVersionRecorder()
+      ev_option = variables.EmbeddingVariableOption(version_recorder=version_recorder)
+      var = variable_scope.get_embedding_variable("var", embedding_dim=3, ev_option=ev_option)
+      ids = array_ops.placeholder(dtype=dtypes.int64)
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad.AdagradOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      version = version_recorder.lookup(math_ops.cast([1,2,3,4], dtype=dtypes.int64))
+    with self.test_session() as sess:
+      sess.run([init])
+      sess.run(train_op, feed_dict={ids:[4]})
+      sess.run(train_op, feed_dict={ids:[3]})
+      sess.run(train_op, feed_dict={ids:[2]})
+      sess.run(train_op, feed_dict={ids:[1]})
+      result = sess.run(version)
+      self.assertAllEqual(result, [3,2,1,0])
+
+  def testCustomVersionRecorderWithSGD(self):
+    print("testCustomVersionRecorder")
+    class MyVersionRecorder(variables.VersionRecorder):
+      def __init__(self):
+        self._counter = variable_scope.get_variable("version_recorder", shape=[10], dtype=dtypes.int64)
+      def update(self, ids, global_step):
+        from tensorflow.python.ops import state_ops
+        global_step_tensor = array_ops.broadcast_to(global_step, array_ops.shape(ids))
+        return state_ops.scatter_update(self._counter, ids, global_step_tensor)
+      def lookup(self, ids):
+        return array_ops.gather(self._counter, ids)
+
+    with ops.device("/cpu:0"):
+      version_recorder = MyVersionRecorder()
+      ev_option = variables.EmbeddingVariableOption(version_recorder=version_recorder)
+      var = variable_scope.get_embedding_variable("var", embedding_dim=3, ev_option=ev_option)
+      ids = array_ops.placeholder(dtype=dtypes.int64)
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = gradient_descent.GradientDescentOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v, global_step=gs)
+      init = variables.global_variables_initializer()
+      version = version_recorder.lookup(math_ops.cast([1,2,3,4], dtype=dtypes.int64))
+    with self.test_session() as sess:
+      sess.run([init])
+      sess.run(train_op, feed_dict={ids:[4]})
+      sess.run(train_op, feed_dict={ids:[3]})
+      sess.run(train_op, feed_dict={ids:[2]})
+      sess.run(train_op, feed_dict={ids:[1]})
+      result = sess.run(version)
+      self.assertAllEqual(result, [3,2,1,0])
 
 if __name__ == "__main__":
   googletest.main()

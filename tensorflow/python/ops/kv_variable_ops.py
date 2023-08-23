@@ -278,8 +278,18 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
       self._false_positive_probability = -1.0
       self._counter_type = dtypes.uint64
 
-    self._record_freq = (os.environ.get("TF_RECORD_FREQ", "0") == "1")
-    self._record_version = (os.environ.get("TF_RECORD_VERSION", "0") == "1")
+    self.freq_recorder = evconfig.freq_recorder
+    self.version_recorder = evconfig.version_recorder
+
+    if isinstance(self.freq_recorder, variables.EVFreqRecorder):
+      self.freq_recorder.add_var(self)
+    if isinstance(self.version_recorder, variables.EVVersionRecorder):
+      self.version_recorder.add_var(self)
+
+    self._record_freq = (os.environ.get("TF_RECORD_FREQ", "0") == "1") or \
+        isinstance(self.freq_recorder, variables.EVFreqRecorder)
+    self._record_version = (os.environ.get("TF_RECORD_VERSION", "0") == "1") or \
+        isinstance(self.version_recorder, variables.EVVersionRecorder)
     self._l2_weight_threshold = evconfig.l2_weight_threshold
     self._storage_type = evconfig.storage_type
     self._storage_path = evconfig.storage_path
@@ -1006,92 +1016,6 @@ def lookup_tier(var, ids):
           pindices, partitioned_result)
     return ret
 
-def lookup_freq(var, ids):
-  if isinstance(var, EmbeddingVariable):
-    return  gen_kv_variable_ops.ev_get_frequency(var._handle,
-                                            ids,
-                                            Tvalues=var._dtype)
-  elif isinstance(var, variables.PartitionedVariable):
-    ev_list = list(var)
-    np = len(ev_list)
-    partitioned_result = []
-    gather_ids, pindices = dynamic_partition(ids, np)
-    for (i, val) in enumerate(ev_list):
-      with ops.colocate_with(val):
-        result =  gen_kv_variable_ops.ev_get_frequency(val._handle,
-                                            gather_ids[i],
-                                            Tvalues=var._dtype)
-        partitioned_result.append(result)
-    from tensorflow.python.ops import data_flow_ops
-    ret = data_flow_ops.parallel_dynamic_stitch(
-          pindices, partitioned_result)
-    return ret
-
-def add_freq(var, ids, counts):
-  if isinstance(var, EmbeddingVariable):
-    return  gen_kv_variable_ops.ev_add_frequency(var._handle,
-                                            ids,
-                                            counts,
-                                            Tvalues=var._dtype)
-  elif isinstance(var, variables.PartitionedVariable):
-    ev_list = list(var)
-    np = len(ev_list)
-    partitioned_result = []
-    p_assignments = ids % 1000 % np
-    p_assignments = math_ops.cast(p_assignments, dtypes.int32)
-    from tensorflow.python.ops import data_flow_ops
-    update_ids = data_flow_ops.dynamic_partition(ids, p_assignments, np)
-    update_counts = data_flow_ops.dynamic_partition(counts, p_assignments, np)
-    for (i, val) in enumerate(ev_list):
-      with ops.colocate_with(val):
-        result =  gen_kv_variable_ops.ev_add_frequency(val._handle,
-                                            update_ids[i],
-                                            update_counts[i],
-                                            Tvalues=var._dtype)
-        partitioned_result.append(result)
-    return partitioned_result
-
-def lookup_version(var, ids):
-  if isinstance(var, EmbeddingVariable):
-    return  gen_kv_variable_ops.ev_get_version(var._handle,
-                                            ids,
-                                            Tvalues=var._dtype)
-  elif isinstance(var, variables.PartitionedVariable):
-    ev_list = list(var)
-    np = len(ev_list)
-    partitioned_result = []
-    gather_ids, pindices = dynamic_partition(ids, np)
-    for (i, val) in enumerate(ev_list):
-      with ops.colocate_with(val):
-        result =  gen_kv_variable_ops.ev_get_version(val._handle,
-                                            gather_ids[i],
-                                            Tvalues=var._dtype)
-        partitioned_result.append(result)
-    from tensorflow.python.ops import data_flow_ops
-    ret = data_flow_ops.parallel_dynamic_stitch(
-          pindices, partitioned_result)
-    return ret
-
-def update_version(var, ids, global_step):
-  if isinstance(var, EmbeddingVariable):
-    return  gen_kv_variable_ops.ev_update_version(var._handle,
-                                            ids,
-                                            global_step,
-                                            Tvalues=var._dtype)
-  elif isinstance(var, variables.PartitionedVariable):
-    ev_list = list(var)
-    np = len(ev_list)
-    partitioned_result = []
-    gather_ids, pindices = dynamic_partition(ids, np)
-    for (i, val) in enumerate(ev_list):
-      with ops.colocate_with(val):
-        update_op = gen_kv_variable_ops.ev_update_version(val._handle,
-                                            gather_ids[i],
-                                            global_step,
-                                            Tvalues=var._dtype)
-        partitioned_result.append(update_op)
-    return partitioned_result
-
 def remove(var, ids):
   if isinstance(var, EmbeddingVariable):
     return gen_kv_variable_ops.kv_resource_remove_feature(
@@ -1100,7 +1024,7 @@ def remove(var, ids):
     ev_list = list(var)
     np = len(ev_list)
     partitioned_result = []
-    gather_ids, pindices = dynamic_partition(ids, np)
+    gather_ids, pindices = variables.dynamic_partition(ids, np)
     for (i, val) in enumerate(ev_list):
       with ops.colocate_with(val):
         remove_op = gen_kv_variable_ops.kv_resource_remove_feature(
@@ -1129,18 +1053,11 @@ def insert(var, ids, values):
         partitioned_result.append(insert_op)
     return partitioned_result
 
-EQUAL = lambda x,y: math_ops.equal(x, y)
-NOE_EQUAL = lambda x,y: math_ops.not_equal(x, y)
-GREATER = lambda x,y: math_ops.greater(x, y)
-LESS = lambda x,y: math_ops.less(x, y)
-GREATER_EQUAL = lambda x,y: math_ops.greater_equal(x, y)
-LESS_EQUAL = lambda x,y: math_ops.less_equal(x, y)
-
 def selective_lookup_l2_weight(var, operator, threshold):
   if isinstance(var, EmbeddingVariable):
     l2_weights = gen_kv_variable_ops.ev_export_l2_weight(
         var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
-    return filter_key_based_on_values(var, operator, l2_weights, threshold)
+    return variables.filter_key_based_on_values(var, operator, l2_weights, threshold)
   elif isinstance(var, variables.PartitionedVariable):
     ev_list = list(var)
     np = len(ev_list)
@@ -1150,67 +1067,14 @@ def selective_lookup_l2_weight(var, operator, threshold):
         l2_weights = gen_kv_variable_ops.ev_export_l2_weight(
             val._handle, Tkeys=val._invalid_key_type, dtype=val._dtype)
         partitioned_result.append(
-            filter_key_based_on_values(val, operator, l2_weights, threshold))
+            variables.filter_key_based_on_values(val, operator, l2_weights, threshold))
     return array_ops.concat(partitioned_result, 0)
-
-
-def selective_lookup_freq(var, operator, threshold):
-  if isinstance(var, EmbeddingVariable):
-    freqs = gen_kv_variable_ops.ev_export_frequency(
-        var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
-    return filter_key_based_on_values(var, operator, freqs, threshold)
-  elif isinstance(var, variables.PartitionedVariable):
-    ev_list = list(var)
-    np = len(ev_list)
-    partitioned_result = []
-    for (i, val) in enumerate(ev_list):
-      with ops.colocate_with(val):
-        freqs = gen_kv_variable_ops.ev_export_frequency(
-            val._handle, Tkeys=val._invalid_key_type, dtype=val._dtype)
-        partitioned_result.append(
-            filter_key_based_on_values(val, operator, freqs, threshold))
-    return array_ops.concat(partitioned_result, 0)
-
-def selective_lookup_version(var, operator, threshold):
-  if isinstance(var, EmbeddingVariable):
-    versions = gen_kv_variable_ops.ev_export_version(
-        var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
-    return filter_key_based_on_values(var, operator, versions, threshold)
-  elif isinstance(var, variables.PartitionedVariable):
-    ev_list = list(var)
-    np = len(ev_list)
-    partitioned_result = []
-    for (i, val) in enumerate(ev_list):
-      with ops.colocate_with(val):
-        freqs = gen_kv_variable_ops.ev_export_version(
-            val._handle, Tkeys=val._invalid_key_type, dtype=val._dtype)
-        partitioned_result.append(
-            filter_key_based_on_values(val, operator, freqs, threshold))
-    return array_ops.concat(partitioned_result, 0)
-
-def filter_key_based_on_values(var, operator, values, threshold):
-  keys = gen_kv_variable_ops.ev_export_key(
-      var._handle, Tkeys=var._invalid_key_type, dtype=var._dtype)
-  broadcast_threshold = array_ops.fill(array_ops.shape(values), threshold)
-  compare_result = operator(values, broadcast_threshold)
-  compare_result.set_shape([None])
-  return array_ops.boolean_mask(keys, compare_result)
 
 def lookup_resource(var):
   return gen_kv_variable_ops.kv_resource_lookup_resource(
       var.handle,
       Tkeys=var._invalid_key_type,
       dtype=var._dtype)
-
-def dynamic_partition(ids, np):
-  original_indices = math_ops.range(array_ops.size(ids))
-  p_assignments = ids % 1000 % np
-  p_assignments = math_ops.cast(p_assignments, dtypes.int32)
-  from tensorflow.python.ops import data_flow_ops
-  gather_ids = data_flow_ops.dynamic_partition(ids, p_assignments, np)
-  pindices = data_flow_ops.dynamic_partition(original_indices,
-                                             p_assignments, np)
-  return gather_ids, pindices
 
 # Register a conversion function which reads the value of the variable,
 # allowing instances of the class to be used as tensors.

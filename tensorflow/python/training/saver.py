@@ -234,7 +234,7 @@ class BaseSaverBuilder(object):
         ev_resources.append(saveable.resource)
         ev_key_types.append(saveable.key_type)
         if saveable.var.custom_feature_evict != None:
-          evict_ids = saveable.var.custom_feature_evict.get_evict_ids(saveable.var)
+          evict_ids = saveable.var.custom_feature_evict.get_evict_ids()
           evict_op = kv_variable_ops.remove(saveable.var, evict_ids)
           evict_ops.append(evict_op)
         continue
